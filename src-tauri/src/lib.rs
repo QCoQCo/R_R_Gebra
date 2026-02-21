@@ -1,14 +1,22 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod math_engine;
+
+use math_engine::GraphRequest;
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+#[tauri::command]
+fn calculate_graph(request: GraphRequest) -> Result<Vec<math_engine::Point>, String> {
+    math_engine::calculate_graph(request)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![greet, calculate_graph])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

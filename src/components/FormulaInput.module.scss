@@ -1,0 +1,40 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: var(--input-bg, #fff);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+
+  label {
+    min-width: 4rem;
+    font-size: 0.9rem;
+  }
+
+  input[type='text'] {
+    flex: 1;
+    min-width: 12rem;
+  }
+
+  input[type='number'] {
+    width: 5rem;
+  }
+}
+
+button {
+  align-self: flex-start;
+}
+
+@media (prefers-color-scheme: dark) {
+  .form {
+    background: var(--input-bg, #0f0f0f98);
+  }
+}
