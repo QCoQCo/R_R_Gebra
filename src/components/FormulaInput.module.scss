@@ -1,31 +1,50 @@
+/* 4.2 Form padding, 4.1 토큰 */
 .form {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding: 1rem;
-  background: var(--input-bg, #fff);
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  gap: var(--space-md);
+  padding: var(--space-xl);
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
 }
 
+/* 4.3 폼·입력 필드 */
 .row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   flex-wrap: wrap;
 
   label {
-    min-width: 4rem;
+    width: 5rem;
+    flex-shrink: 0;
     font-size: 0.9rem;
   }
 
-  input[type='text'] {
+  input[type='text'],
+  .mathField {
     flex: 1;
     min-width: 12rem;
   }
 
+  math-field {
+    flex: 1;
+    min-width: 12rem;
+    min-height: 2.75rem;
+    font-size: 1.25rem;
+    padding: var(--space-sm) var(--space-md);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-input);
+    color: var(--color-text);
+  }
+
   input[type='number'] {
     width: 5rem;
+    text-align: right;
+    color: var(--color-text);
+    background-color: var(--color-bg-input);
   }
 }
 
@@ -33,8 +52,278 @@ button {
   align-self: flex-start;
 }
 
-@media (prefers-color-scheme: dark) {
+.controlPanel {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.controlPanelSlide {
+  overflow: hidden;
+  max-width: 0;
+  transition: max-width 0.3s ease-out;
+
+  &[data-expanded='true'] {
+    max-width: 580px;
+  }
+}
+
+.controlRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xl);
+  flex-wrap: wrap;
+  padding-left: var(--space-sm);
+  min-width: max-content;
+}
+
+/* 4.3 버튼 그룹 - gap으로 시각적 그룹핑 */
+.modeSection,
+.themeSection {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.modeLabel {
+  font-size: 0.9rem;
+  width: 3rem;
+  flex-shrink: 0;
+}
+
+/* 4.4 toggleBtn: 연한 테두리, modeBtn: 선택 시 primary */
+.toggleBtn {
+  align-self: flex-start;
+  padding: 0.4rem var(--space-md);
+  font-size: 0.9rem;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background 0.2s, border-color 0.2s;
+
+  &:hover {
+    background: #f0f0f0;
+    color: #333;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+}
+
+.modeBtn {
+  padding: 0.35rem var(--space-md);
+  font-size: 0.85rem;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background 0.2s, border-color 0.2s;
+
+  &:hover {
+    background: #f0f0f0;
+    color: #333;
+  }
+
+  &[data-active='true'] {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+    color: #fff;
+
+    &:hover {
+      background: var(--color-primary-hover);
+      border-color: var(--color-primary-hover);
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+}
+
+.rangeSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.submitRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* 4.4 submit: primary 강조 */
+.submitRow button[type='submit'] {
+  padding: var(--space-sm) var(--space-xl);
+  font-size: 1rem;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+
+  &:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+    border-color: var(--color-primary-hover);
+  }
+
+  &:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+}
+
+/* 4.7 스피너 통일 - 20px */
+.spinner {
+  display: inline-block;
+  width: 1.25em;
+  height: 1.25em;
+  margin-right: var(--space-sm);
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 4.7 에러 메시지 - 아이콘 + border-left 강조 */
+.error {
+  margin: 0;
+  padding: var(--space-sm) var(--space-lg);
+  padding-left: 2.5rem;
+  color: var(--color-error);
+  background: var(--color-error-bg);
+  border-radius: var(--radius-md);
+  border-left: 4px solid var(--color-error);
+  font-size: 0.9rem;
+  position: relative;
+
+  &::before {
+    content: '⚠';
+    position: absolute;
+    left: var(--space-sm);
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 1.1rem;
+  }
+}
+
+/* 다크 모드 - data-theme 기반 (4.7 중복 정리) */
+[data-theme='dark'] {
   .form {
-    background: var(--input-bg, #0f0f0f98);
+    background: var(--color-bg-elevated);
+  }
+
+  .row math-field,
+  .row input[type='number'] {
+    color: #f0f0f0;
+    background-color: #1a1a1a;
+    border-color: var(--color-border);
+  }
+
+  .modeBtn {
+    border-color: var(--color-border-dark);
+    color: var(--color-text-muted);
+
+    &:hover {
+      background: #2a2a2a;
+      color: #ddd;
+    }
+
+    &[data-active='true'] {
+      background: var(--color-primary);
+      border-color: var(--color-primary);
+      color: #0f0f0f;
+
+      &:hover {
+        background: var(--color-primary-hover);
+        border-color: var(--color-primary-hover);
+      }
+    }
+  }
+
+  .toggleBtn {
+    border-color: var(--color-border-dark);
+    color: var(--color-text-muted);
+
+    &:hover {
+      background: #2a2a2a;
+      color: #ddd;
+    }
+  }
+
+  .spinner {
+    border-color: var(--color-border-dark);
+    border-top-color: var(--color-primary);
+  }
+
+  .error {
+    color: var(--color-error);
+    background: var(--color-error-bg);
+  }
+}
+
+/* prefers-color-scheme: dark (시스템, data-theme 없을 때) */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .form {
+    background: var(--color-bg-elevated);
+  }
+
+  :root:not([data-theme='light']) .row math-field,
+  :root:not([data-theme='light']) .row input[type='number'] {
+    color: #f0f0f0;
+    background-color: #1a1a1a;
+    border-color: var(--color-border);
+  }
+
+  :root:not([data-theme='light']) .modeBtn {
+    border-color: var(--color-border-dark);
+    color: var(--color-text-muted);
+
+    &:hover {
+      background: #2a2a2a;
+      color: #ddd;
+    }
+
+    &[data-active='true'] {
+      background: var(--color-primary);
+      border-color: var(--color-primary);
+      color: #0f0f0f;
+
+      &:hover {
+        background: var(--color-primary-hover);
+        border-color: var(--color-primary-hover);
+      }
+    }
+  }
+
+  :root:not([data-theme='light']) .toggleBtn {
+    border-color: var(--color-border-dark);
+    color: var(--color-text-muted);
+
+    &:hover {
+      background: #2a2a2a;
+      color: #ddd;
+    }
+  }
+
+  :root:not([data-theme='light']) .spinner {
+    border-color: var(--color-border-dark);
+    border-top-color: var(--color-primary);
+  }
+
+  :root:not([data-theme='light']) .error {
+    color: var(--color-error);
+    background: var(--color-error-bg);
   }
 }

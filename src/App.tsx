@@ -1,17 +1,20 @@
+import { useEffect } from 'react';
 import { FormulaInput } from './components/FormulaInput';
 import { GraphCanvas } from './components/GraphCanvas';
-import { useGraphStore } from './store/graphStore';
+import { useThemeStore, applyTheme } from './store/themeStore';
 import './App.scss';
 
 function App() {
-    const { error } = useGraphStore();
+    const { theme, setTheme } = useThemeStore();
+
+    useEffect(() => {
+        applyTheme(theme);
+    }, [theme]);
 
     return (
         <main className='app'>
-            <h1>R_R_Gebra</h1>
+            <FormulaInput theme={theme} setTheme={setTheme} />
             <GraphCanvas />
-            {error && <p className='error'>{error}</p>}
-            <FormulaInput />
         </main>
     );
 }

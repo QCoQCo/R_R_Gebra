@@ -3,11 +3,6 @@ mod math_engine;
 use math_engine::GraphRequest;
 
 #[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
-#[tauri::command]
 fn calculate_graph(request: GraphRequest) -> Result<Vec<math_engine::Point>, String> {
     math_engine::calculate_graph(request)
 }
@@ -16,7 +11,7 @@ fn calculate_graph(request: GraphRequest) -> Result<Vec<math_engine::Point>, Str
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, calculate_graph])
+        .invoke_handler(tauri::generate_handler![calculate_graph])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
