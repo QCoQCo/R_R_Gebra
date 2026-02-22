@@ -1,8 +1,14 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import 'mathlive';
 import { useGraphStore } from '../store/graphStore';
-import { calculateGraph } from '../api';
-import { latexToMeval, checkUnsupportedLatex } from '../utils/latexToMeval';
+import { calculateGraph, calculateImplicit } from '../api';
+import {
+  latexToMeval,
+  latexToMevalImplicit,
+  checkUnsupportedLatex,
+  detectFormulaType,
+} from '../utils/latexToMeval';
+import { POINTS_PER_VIEW, computeImplicitGridSize } from '../constants';
 import type { Theme } from '../store/themeStore';
 import styles from './FormulaInput.module.scss';
 
@@ -20,32 +26,91 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
     const mfRef = useRef<MathfieldElement | null>(null);
     const [showRange, setShowRange] = useState(false);
     const [showControlPanel, setShowControlPanel] = useState(false); // 기본값: 접힌 상태
-    const { xMin, xMax, step, loading, error, formula, viewportMode, setRange, setPoints, setLoading, setError, setFormula, setCachedPoints, setViewportMode } =
-        useGraphStore();
+    const {
+        xMin,
+        xMax,
+        yMin,
+        yMax,
+        step,
+        loading,
+        error,
+        formula,
+        viewportMode,
+        setRange2D,
+        setPoints,
+        setImplicitCurves,
+        setLoading,
+        setError,
+        setFormula,
+        setFormulaType,
+        setCachedPoints,
+        setCachedImplicit,
+        setViewportMode,
+    } = useGraphStore();
 
-    const effectiveStep = viewportMode === 'auto' ? (xMax - xMin) / 500 : step;
+    const effectiveStep = viewportMode === 'auto' ? (xMax - xMin) / POINTS_PER_VIEW : step;
 
     const recalculateWithManualRange = useCallback(async () => {
         const latex = mfRef.current?.value ?? '';
         if (checkUnsupportedLatex(latex)) return;
-        const mevalExpr = latexToMeval(latex);
-        if (!mevalExpr.trim()) return;
-        setFormula(mevalExpr.trim());
-        setLoading(true);
-        setError(null);
-        try {
-            const pts = await calculateGraph({
-                formula: mevalExpr.trim(),
-                x_min: xMin,
-                x_max: xMax,
-                step,
-            });
-            setCachedPoints(mevalExpr.trim(), xMin, xMax, step, pts);
-            setPoints(pts);
-        } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
+        const type = detectFormulaType(latex);
+        setFormulaType(type);
+
+        if (type === 'explicit') {
+            const mevalExpr = latexToMeval(latex);
+            if (!mevalExpr.trim()) return;
+            setFormula(mevalExpr.trim());
+            setLoading(true);
+            setError(null);
+            try {
+                const pts = await calculateGraph({
+                    formula: mevalExpr.trim(),
+                    x_min: xMin,
+                    x_max: xMax,
+                    step,
+                });
+                setCachedPoints(mevalExpr.trim(), xMin, xMax, step, pts);
+                setPoints(pts);
+            } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+            }
+        } else {
+            const mevalExpr = latexToMevalImplicit(latex);
+            if (!mevalExpr) return;
+            setFormula(mevalExpr);
+            setLoading(true);
+            setError(null);
+            const gridSize = computeImplicitGridSize({ xMin, xMax, yMin, yMax });
+            try {
+                const curves = await calculateImplicit({
+                    formula: mevalExpr,
+                    x_min: xMin,
+                    x_max: xMax,
+                    y_min: yMin,
+                    y_max: yMax,
+                    grid_size: gridSize,
+                });
+                setCachedImplicit(mevalExpr, xMin, xMax, yMin, yMax, gridSize, curves);
+                setImplicitCurves(curves);
+            } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+            }
         }
-    }, [xMin, xMax, step, setFormula, setLoading, setError, setCachedPoints, setPoints]);
+    }, [
+        xMin,
+        xMax,
+        yMin,
+        yMax,
+        step,
+        setFormula,
+        setFormulaType,
+        setLoading,
+        setError,
+        setCachedPoints,
+        setCachedImplicit,
+        setPoints,
+        setImplicitCurves,
+    ]);
 
     useEffect(() => {
         const el = mfRef.current;
@@ -62,8 +127,11 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                 debounceTimer = null;
                 const latex = (el as MathfieldElement).value ?? '';
                 if (checkUnsupportedLatex(latex)) return;
-                const mevalExpr = latexToMeval(latex);
-                if (!mevalExpr.trim()) return;
+                const type = detectFormulaType(latex);
+                const mevalExpr =
+                    type === 'implicit' ? latexToMevalImplicit(latex) : latexToMeval(latex);
+                if (!mevalExpr?.trim()) return;
+                setFormulaType(type);
                 setFormula(mevalExpr.trim());
             }, DEBOUNCE_MS);
         };
@@ -94,7 +162,7 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
             el.removeEventListener('focusin', showKb);
             el.removeEventListener('focusout', hideKb);
         };
-    }, [setFormula]);
+    }, [setFormula, setFormulaType]);
 
     const prevModeRef = useRef(viewportMode);
     useEffect(() => {
@@ -112,30 +180,55 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
             setError(unsupported);
             return;
         }
-        const mevalExpr = latexToMeval(latex);
-        if (!mevalExpr.trim()) return;
-        setFormula(mevalExpr.trim());
-        setLoading(true);
-        setError(null);
+        const type = detectFormulaType(latex);
+        setFormulaType(type);
 
-        try {
-            const pts = await calculateGraph({
-                formula: mevalExpr.trim(),
-                x_min: xMin,
-                x_max: xMax,
-                step: effectiveStep,
-            });
-            setCachedPoints(mevalExpr.trim(), xMin, xMax, effectiveStep, pts);
-            setPoints(pts);
-        } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
+        if (type === 'explicit') {
+            const mevalExpr = latexToMeval(latex);
+            if (!mevalExpr.trim()) return;
+            setFormula(mevalExpr.trim());
+            setLoading(true);
+            setError(null);
+            try {
+                const pts = await calculateGraph({
+                    formula: mevalExpr.trim(),
+                    x_min: xMin,
+                    x_max: xMax,
+                    step: effectiveStep,
+                });
+                setCachedPoints(mevalExpr.trim(), xMin, xMax, effectiveStep, pts);
+                setPoints(pts);
+            } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+            }
+        } else {
+            const mevalExpr = latexToMevalImplicit(latex);
+            if (!mevalExpr) return;
+            setFormula(mevalExpr);
+            setLoading(true);
+            setError(null);
+            const gridSize = computeImplicitGridSize({ xMin, xMax, yMin, yMax });
+            try {
+                const curves = await calculateImplicit({
+                    formula: mevalExpr,
+                    x_min: xMin,
+                    x_max: xMax,
+                    y_min: yMin,
+                    y_max: yMax,
+                    grid_size: gridSize,
+                });
+                setCachedImplicit(mevalExpr, xMin, xMax, yMin, yMax, gridSize, curves);
+                setImplicitCurves(curves);
+            } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+            }
         }
     }
 
     return (
         <form className={styles.form} onSubmit={handleSubmit}>
             <div className={styles.row}>
-                <label htmlFor='formula'>수식 (y = f(x))</label>
+                <label htmlFor='formula'>수식 (y = f(x) 또는 f(x,y) = 0)</label>
                 {React.createElement('math-field', {
                     ref: (el: HTMLElement | null) => {
                         mfRef.current = el as MathfieldElement | null;
@@ -214,7 +307,9 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                             id='xMin'
                             type='number'
                             value={xMin}
-                            onChange={(e) => setRange(Number(e.target.value), xMax, step)}
+                            onChange={(e) =>
+                                setRange2D(Number(e.target.value), xMax, yMin, yMax, step)
+                            }
                             step='0.5'
                             disabled={loading}
                         />
@@ -223,7 +318,31 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                             id='xMax'
                             type='number'
                             value={xMax}
-                            onChange={(e) => setRange(xMin, Number(e.target.value), step)}
+                            onChange={(e) =>
+                                setRange2D(xMin, Number(e.target.value), yMin, yMax, step)
+                            }
+                            step='0.5'
+                            disabled={loading}
+                        />
+                        <label htmlFor='yMin'>y 최소</label>
+                        <input
+                            id='yMin'
+                            type='number'
+                            value={yMin}
+                            onChange={(e) =>
+                                setRange2D(xMin, xMax, Number(e.target.value), yMax, step)
+                            }
+                            step='0.5'
+                            disabled={loading}
+                        />
+                        <label htmlFor='yMax'>y 최대</label>
+                        <input
+                            id='yMax'
+                            type='number'
+                            value={yMax}
+                            onChange={(e) =>
+                                setRange2D(xMin, xMax, yMin, Number(e.target.value), step)
+                            }
                             step='0.5'
                             disabled={loading}
                         />
@@ -232,7 +351,9 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                             id='step'
                             type='number'
                             value={step}
-                            onChange={(e) => setRange(xMin, xMax, Number(e.target.value))}
+                            onChange={(e) =>
+                                setRange2D(xMin, xMax, yMin, yMax, Number(e.target.value))
+                            }
                             step='0.01'
                             min='0.01'
                             disabled={loading}
