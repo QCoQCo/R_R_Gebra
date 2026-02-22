@@ -1,49 +1,87 @@
+/* 4.5 그래프 영역 - box-shadow 카드 느낌 */
 .canvas {
-    position: relative;
-    width: 100%;
-    aspect-ratio: 1.25;
-    border-radius: 8px;
-    overflow: hidden;
-    background: var(--mafs-bg, #fff);
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1.25;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-md);
 }
 
+/* 4.5 로딩 오버레이 - backdrop-filter blur */
 .loadingOverlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.75rem;
-    background: rgba(255, 255, 255, 0.85);
-    color: #333;
-    font-size: 0.95rem;
-    z-index: 10;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  color: #333;
+  font-size: 0.95rem;
+  z-index: 10;
+
+  /* 준비 중: pointer-events none으로 줌/팬 방해 안 함 */
+  &[data-pending='true'] {
+    background: rgba(255, 255, 255, 0.4);
+    color: #666;
+    pointer-events: none;
+  }
 }
 
+/* 4.7 스피너 통일 - 32px, 변수 색상 */
 .loadingSpinner {
-    width: 32px;
-    height: 32px;
-    border: 3px solid #e0e0e0;
-    border-top-color: #396cd8;
-    border-radius: 50%;
-    animation: graphSpin 0.8s linear infinite;
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: graphSpin 0.8s linear infinite;
 }
 
 @keyframes graphSpin {
-    to {
-        transform: rotate(360deg);
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 4.5 다크 모드 - data-theme에 맞게 */
+[data-theme='dark'] {
+  .loadingOverlay {
+    background: rgba(0, 0, 0, 0.6);
+    color: #ddd;
+
+    &[data-pending='true'] {
+      background: rgba(0, 0, 0, 0.35);
+      color: #999;
+      pointer-events: none;
     }
+  }
+
+  .loadingSpinner {
+    border-color: var(--color-border-dark);
+    border-top-color: var(--color-primary);
+  }
 }
 
 @media (prefers-color-scheme: dark) {
-    .loadingOverlay {
-        background: rgba(0, 0, 0, 0.7);
-        color: #ddd;
-    }
+  :root:not([data-theme='light']) .loadingOverlay {
+    background: rgba(0, 0, 0, 0.6);
+    color: #ddd;
 
-    .loadingSpinner {
-        border-color: #444;
-        border-top-color: #24c8db;
+    &[data-pending='true'] {
+      background: rgba(0, 0, 0, 0.35);
+      color: #999;
+      pointer-events: none;
     }
+  }
+
+  :root:not([data-theme='light']) .loadingSpinner {
+    border-color: var(--color-border-dark);
+    border-top-color: var(--color-primary);
+  }
 }

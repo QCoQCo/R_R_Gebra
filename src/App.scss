@@ -1,10 +1,56 @@
+/* 4.1 디자인 토큰 */
+:root {
+    /* 간격: 4px/8px 베이스 */
+    --space-xs: 0.25rem;
+    --space-sm: 0.5rem;
+    --space-md: 0.75rem;
+    --space-lg: 1rem;
+    --space-xl: 1.5rem;
+
+    /* Border radius */
+    --radius-sm: 6px;
+    --radius-md: 8px;
+
+    /* Shadow */
+    --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.08);
+    --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.1);
+
+    /* 색상 - 라이트 */
+    --color-primary: #396cd8;
+    --color-primary-hover: #2a5bc4;
+    --color-border: #ccc;
+    --color-border-dark: #555;
+    --color-text: #0f0f0f;
+    --color-text-muted: #555;
+    --color-bg: #f6f6f6;
+    --color-bg-elevated: #fff;
+    --color-bg-input: #fff;
+    --color-error: #c00;
+    --color-error-bg: #ffe0e0;
+}
+
+[data-theme='dark'] {
+    --color-primary: #24c8db;
+    --color-primary-hover: #1eb8c9;
+    --color-border: #555;
+    --color-text: #f6f6f6;
+    --color-text-muted: #aaa;
+    --color-bg: #2f2f2f;
+    --color-bg-elevated: #0f0f0f98;
+    --color-bg-input: #0f0f0f98;
+    --color-error: #f88;
+    --color-error-bg: #4a2020;
+    --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
 :root {
     font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
     font-size: 16px;
     line-height: 24px;
     font-weight: 400;
-    color: #0f0f0f;
-    background-color: #f6f6f6;
+    color: var(--color-text);
+    background-color: var(--color-bg);
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
@@ -12,43 +58,20 @@
     -webkit-text-size-adjust: 100%;
 }
 
+/* 4.2 레이아웃 */
 .app {
     margin: 0 auto;
-    max-width: 900px;
+    max-width: 960px;
     padding: 2rem;
     display: flex;
     flex-direction: column;
-    gap: 1.5rem;
-}
-
-h1 {
-    margin: 0;
-    text-align: center;
+    gap: var(--space-xl);
 }
 
 .subtitle {
     margin: -0.5rem 0 0;
-    color: #666;
+    color: var(--color-text-muted);
     font-size: 0.95rem;
-}
-
-.error {
-    color: #c00;
-    margin: 0;
-    padding: 0.5rem 1rem;
-    background: #ffe0e0;
-    border-radius: 8px;
-}
-
-@media (prefers-color-scheme: dark) {
-    .subtitle {
-        color: #aaa;
-    }
-
-    .error {
-        color: #f88;
-        background: #4a2020;
-    }
 }
 
 a {
@@ -61,18 +84,18 @@ a {
     }
 }
 
+/* 전역 input/button 기본 (컴포넌트에서 오버라이드) */
 input,
 button {
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     border: 1px solid transparent;
     padding: 0.6em 1.2em;
     font-size: 1em;
     font-weight: 500;
     font-family: inherit;
-    color: #0f0f0f;
-    background-color: #ffffff;
-    transition: border-color 0.25s;
-    box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+    color: var(--color-text);
+    background-color: var(--color-bg-elevated);
+    transition: background 0.2s, border-color 0.2s;
     outline: none;
 }
 
@@ -80,29 +103,71 @@ button {
     cursor: pointer;
 
     &:hover {
-        border-color: #396cd8;
+        border-color: var(--color-primary);
     }
 
     &:active {
-        border-color: #396cd8;
+        border-color: var(--color-primary);
         background-color: #e8e8e8;
+    }
+
+    &:focus-visible {
+        outline: 2px solid var(--color-primary);
+        outline-offset: 2px;
     }
 }
 
+/* 시스템 다크 모드 - data-theme 없을 때 변수 적용 */
 @media (prefers-color-scheme: dark) {
-    :root {
-        color: #f6f6f6;
-        background-color: #2f2f2f;
+    :root:not([data-theme='light']) {
+        --color-primary: #24c8db;
+        --color-primary-hover: #1eb8c9;
+        --color-border: #555;
+        --color-text: #f6f6f6;
+        --color-text-muted: #aaa;
+        --color-bg: #2f2f2f;
+        --color-bg-elevated: #0f0f0f98;
+        --color-bg-input: #0f0f0f98;
+        --color-error: #f88;
+        --color-error-bg: #4a2020;
+        --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
+        --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.4);
+        color: var(--color-text);
+        background-color: var(--color-bg);
+    }
+
+    :root:not([data-theme='light']) a:hover {
+        color: #24c8db;
+    }
+
+    :root:not([data-theme='light']) input,
+    :root:not([data-theme='light']) button {
+        color: #ffffff;
+        background-color: var(--color-bg-elevated);
+    }
+
+    :root:not([data-theme='light']) button:active {
+        background-color: #0f0f0f69;
+    }
+}
+
+/* 수동 다크 모드 */
+[data-theme='dark'] {
+    color: var(--color-text);
+    background-color: var(--color-bg);
+
+    .subtitle {
+        color: var(--color-text-muted);
     }
 
     a:hover {
-        color: #24c8db;
+        color: var(--color-primary);
     }
 
     input,
     button {
         color: #ffffff;
-        background-color: #0f0f0f98;
+        background-color: var(--color-bg-elevated);
     }
 
     button:active {

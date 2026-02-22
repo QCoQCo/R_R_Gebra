@@ -10,6 +10,14 @@ import styles from './GraphCanvas.module.scss';
 const POINTS_PER_VIEW = 500;
 const DEFAULT_VIEW: [number, number] = [-10, 10];
 
+/** 뷰포트 x 범위(span)에 따라 축 눈금 간격 반환. 겹침 방지 */
+function axisLineInterval(span: number): number {
+    if (span <= 10) return 0.5;
+    if (span <= 40) return 1;
+    if (span <= 150) return 5;
+    return 10;
+}
+
 function interpolatePoints(points: Point[], t: number): [number, number] {
     if (points.length === 0) return [0, 0];
     if (points.length === 1) return [points[0].x, points[0].y];
@@ -26,6 +34,7 @@ function interpolatePoints(points: Point[], t: number): [number, number] {
 export function GraphCanvas() {
     const containerRef = useRef<HTMLDivElement>(null);
     const [size, setSize] = useState({ width: 800, height: 800 });
+    const [pending, setPending] = useState(false);
     const {
         points,
         xMin,
@@ -33,6 +42,7 @@ export function GraphCanvas() {
         loading,
         viewportMode,
         formula,
+        viewportBounds,
         getCachedPoints,
         setCachedPoints,
         setPoints,
@@ -89,7 +99,7 @@ export function GraphCanvas() {
             setLoading,
             setError,
             setViewportBounds,
-        ]
+        ],
     );
 
     const viewBox =
@@ -97,12 +107,24 @@ export function GraphCanvas() {
             ? { x: [xMin, xMax] as [number, number], y: [xMin, xMax] as [number, number] }
             : { x: DEFAULT_VIEW, y: DEFAULT_VIEW };
 
+    const span =
+        viewportMode === 'manual'
+            ? xMax - xMin
+            : viewportBounds
+              ? viewportBounds.xMax - viewportBounds.xMin
+              : 20;
+    const lineInterval = axisLineInterval(span);
+
     return (
         <div ref={containerRef} className={styles.canvas}>
-            {loading && (
-                <div className={styles.loadingOverlay} aria-live='polite'>
+            {(loading || pending) && (
+                <div
+                    className={styles.loadingOverlay}
+                    aria-live='polite'
+                    data-pending={pending && !loading}
+                >
                     <span className={styles.loadingSpinner} />
-                    <span>계산 중...</span>
+                    <span>{loading ? '계산 중...' : '준비 중...'}</span>
                 </div>
             )}
             <Mafs
@@ -117,11 +139,17 @@ export function GraphCanvas() {
                     <ViewportObserver
                         width={size.width}
                         height={size.height}
+                        formula={formula}
                         onBoundsChange={handleViewportBoundsChange}
+                        onPendingChange={setPending}
                         debounceMs={250}
                     />
                 )}
-                <Coordinates.Cartesian subdivisions={4} />
+                <Coordinates.Cartesian
+                    subdivisions={4}
+                    xAxis={{ lines: lineInterval }}
+                    yAxis={{ lines: lineInterval }}
+                />
                 {points.length >= 2 && (
                     <Plot.Parametric
                         domain={[0, 1]}

@@ -14,7 +14,9 @@ function clampBounds(bounds: ViewportBounds): ViewportBounds {
 interface ViewportObserverProps {
   width: number;
   height: number;
+  formula: string;
   onBoundsChange: (bounds: ViewportBounds) => void;
+  onPendingChange?: (pending: boolean) => void;
   debounceMs?: number;
 }
 
@@ -25,7 +27,9 @@ interface ViewportObserverProps {
 export function ViewportObserver({
   width,
   height,
+  formula,
   onBoundsChange,
+  onPendingChange,
   debounceMs = 250,
 }: ViewportObserverProps) {
   const { xPaneRange } = usePaneContext();
@@ -36,7 +40,10 @@ export function ViewportObserver({
   useEffect(() => {
     if (width <= 0 || height <= 0) return;
 
+    onPendingChange?.(true);
+
     const run = () => {
+      onPendingChange?.(false);
       const raw: ViewportBounds = { xMin, xMax };
       const bounds = clampBounds(raw);
       const key = `${bounds.xMin},${bounds.xMax}`;
@@ -47,12 +54,13 @@ export function ViewportObserver({
 
     timeoutRef.current = setTimeout(run, debounceMs);
     return () => {
+      onPendingChange?.(false);
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
         timeoutRef.current = null;
       }
     };
-  }, [width, height, xMin, xMax, onBoundsChange, debounceMs]);
+  }, [width, height, formula, xMin, xMax, onBoundsChange, onPendingChange, debounceMs]);
 
   return null;
 }

@@ -34,37 +34,65 @@ export function latexToMeval(latex: string): string {
   s = s.replace(/\\frac\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g, (_, a, b) => {
     return `(${latexToMeval(a)})/(${latexToMeval(b)})`;
   });
+  // \frac15, \frac123 등 (괄호 없음) → (1)/(5), (1)/(23)
+  s = s.replace(/\\frac(\d+?)(\d+)/g, (_, a, b) => `(${a})/(${b})`);
 
   // \sqrt{x} → sqrt(x)
   s = s.replace(/\\sqrt\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g, (_, x) => {
     return `sqrt(${latexToMeval(x)})`;
   });
 
-  // \sin(x), \sin{x}, \sin\left(x\right), \log x (괄호 없음)
-  const funcs = ['sin', 'cos', 'tan', 'ln', 'log', 'exp', 'abs'];
-  for (const fn of funcs) {
-    const cmd = `\\\\${fn}`;
+  // \sin(x), \arcsin(x), \sinh(x) 등: LaTeX → meval (arcsin→asin 등 별도 매핑)
+  const funcs: Array<{ latex: string; meval: string }> = [
+    { latex: 'sin', meval: 'sin' },
+    { latex: 'cos', meval: 'cos' },
+    { latex: 'tan', meval: 'tan' },
+    { latex: 'arcsin', meval: 'asin' },
+    { latex: 'arccos', meval: 'acos' },
+    { latex: 'arctan', meval: 'atan' },
+    { latex: 'sinh', meval: 'sinh' },
+    { latex: 'cosh', meval: 'cosh' },
+    { latex: 'tanh', meval: 'tanh' },
+    { latex: 'asinh', meval: 'asinh' },
+    { latex: 'acosh', meval: 'acosh' },
+    { latex: 'atanh', meval: 'atanh' },
+    { latex: 'ln', meval: 'ln' },
+    { latex: 'log', meval: 'log' },
+    { latex: 'exp', meval: 'exp' },
+    { latex: 'abs', meval: 'abs' },
+  ];
+  for (const { latex: cmd, meval: fn } of funcs) {
+    const reCmd = `\\\\${cmd}`;
     // \sin\left(x\right) or \sin(x) or \sin{x}
     s = s.replace(
-      new RegExp(`${cmd}\\s*\\\\left\\(([^)]*)\\\\\\right\\)`, 'g'),
+      new RegExp(`${reCmd}\\s*\\\\left\\(([^)]*)\\\\\\right\\)`, 'g'),
       (_, arg) => `${fn}(${latexToMeval(arg)})`
     );
     s = s.replace(
-      new RegExp(`${cmd}\\s*\\(([^)]*)\\)`, 'g'),
+      new RegExp(`${reCmd}\\s*\\(([^)]*)\\)`, 'g'),
       (_, arg) => `${fn}(${latexToMeval(arg)})`
     );
     s = s.replace(
-      new RegExp(`${cmd}\\s*\\{([^{}]*(?:\\{[^{}]*\\}[^{}]*)*)\\}`, 'g'),
+      new RegExp(`${reCmd}\\s*\\{([^{}]*(?:\\{[^{}]*\\}[^{}]*)*)\\}`, 'g'),
       (_, arg) => `${fn}(${latexToMeval(arg)})`
     );
-    // \log x, \ln x (공백으로 구분)
+    // \sin x^2, \sin x^{n} (괄호 없이, 인자가 x^2 형태) → sin(x^2)
     s = s.replace(
-      new RegExp(`${cmd}\\s+([a-zA-Z0-9.]+)`, 'g'),
+      new RegExp(`${reCmd}\\s+([a-zA-Z0-9.]+)\\^\\{([^{}]*(?:\\{[^{}]*\\}[^{}]*)*)\\}`, 'g'),
+      (_, base, exp) => `${fn}(${base}^(${latexToMeval(exp)}))`
+    );
+    s = s.replace(
+      new RegExp(`${reCmd}\\s+([a-zA-Z0-9.]+)\\^([a-zA-Z0-9.]+)`, 'g'),
+      (_, base, exp) => `${fn}(${base}^${exp})`
+    );
+    // \sin 2x, \sin x (괄호 없이, 단일 항)
+    s = s.replace(
+      new RegExp(`${reCmd}\\s+([a-zA-Z0-9.]+)`, 'g'),
       (_, arg) => `${fn}(${arg})`
     );
     // \log2, \ln2 (공백 없이 바로 붙은 경우)
     s = s.replace(
-      new RegExp(`${cmd}([a-zA-Z0-9.]+)`, 'g'),
+      new RegExp(`${reCmd}([a-zA-Z0-9.]+)`, 'g'),
       (_, arg) => `${fn}(${arg})`
     );
   }
@@ -77,6 +105,9 @@ export function latexToMeval(latex: string): string {
 
   // \cdot, \times → *
   s = s.replace(/\\cdot|\\times/g, '*');
+
+  // 1\%5, 7\%3 등: LaTeX \% (숫자%숫자) → (a)/(b) (나머지 연산 대신 분수로 해석)
+  s = s.replace(/(\d+(?:\.\d+)?)\\%(\d+(?:\.\d+)?)/g, (_, a, b) => `(${a})/(${b})`);
 
   // \pi → pi, \e → e (Euler)
   s = s.replace(/\\pi\b/g, 'pi');
