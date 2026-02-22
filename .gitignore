@@ -23,6 +23,5 @@ dist-ssr
 *.sln
 *.sw?
 
-# Markdown (README.md만 추적)
-*.md
-!README.md
+
+/ect

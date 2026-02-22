@@ -1,5 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+/// log(x) = log10(x) = ln(x) / ln(10)
+fn log10_fn(x: f64) -> f64 {
+    x.ln() / 10_f64.ln()
+}
+
+fn math_context() -> meval::Context<'static> {
+    let mut ctx = meval::Context::new();
+    ctx.func("log", log10_fn)
+        .func("log10", log10_fn);
+    ctx
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Point {
     pub x: f64,
@@ -34,9 +46,12 @@ pub fn calculate_graph(request: GraphRequest) -> Result<Vec<Point>, String> {
         format!("Invalid syntax: {}", e)
     })?;
 
-    let func = expr.bind("x").map_err(|e| {
-        format!("Invalid expression (use 'x' as variable): {}", e)
-    })?;
+    let ctx = math_context();
+    let func = expr
+        .bind_with_context(ctx, "x")
+        .map_err(|e| {
+            format!("Invalid expression (use 'x' as variable): {}", e)
+        })?;
 
     if request.step <= 0.0 {
         return Err("Step must be positive".to_string());
