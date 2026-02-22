@@ -1,14 +1,41 @@
-/** 지원하지 않는 LaTeX 기호. 적분, 합 등은 y=f(x) 그래프에 사용 불가 */
+/** 지원하지 않는 LaTeX 기호. 적분, 합 등은 그래프에 사용 불가 */
 const UNSUPPORTED_PATTERNS = [
   { pattern: /\\int\b|\\iint|\\iiint|\\oint/g, name: '적분(∫)' },
   { pattern: /\\sum\b|\\prod\b/g, name: '합/곱(∑∏)' },
   { pattern: /\\lim\b/g, name: '극한(lim)' },
 ];
 
-export function checkUnsupportedLatex(latex: string): string | null {
+export type FormulaType = 'explicit' | 'implicit';
+
+/** 수식에 = 가 있고 "y =" 형태가 아니면 암시적 방정식 */
+export function detectFormulaType(latex: string): FormulaType {
   const s = latex.trim().replace(/^\s*\$\$?\s*|\s*\$\$?\s*$/g, '').trim();
+  if (!s.includes('=')) return 'explicit';
+  if (/^\s*y\s*=/i.test(s)) return 'explicit';
+  return 'implicit';
+}
+
+export function checkUnsupportedLatex(latex: string, _formulaType?: FormulaType): string | null {
+  const s = latex.trim().replace(/^\s*\$\$?\s*|\s*\$\$?\s*$/g, '').trim();
+  const hint = 'y = f(x) 또는 f(x,y) = 0 형태만 입력해 주세요.';
   for (const { pattern, name } of UNSUPPORTED_PATTERNS) {
-    if (pattern.test(s)) return `${name}은(는) 지원하지 않습니다. y = f(x) 형태의 함수만 입력해 주세요.`;
+    if (pattern.test(s)) return `${name}은(는) 지원하지 않습니다. ${hint}`;
+  }
+  return null;
+}
+
+/**
+ * Splits "left = right" at the first top-level "=" (not inside braces).
+ */
+function splitAtEquals(s: string): [string, string] | null {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '{' || c === '(') depth++;
+    else if (c === '}' || c === ')') depth--;
+    else if (c === '=' && depth === 0) {
+      return [s.slice(0, i).trim(), s.slice(i + 1).trim()];
+    }
   }
   return null;
 }
@@ -16,16 +43,17 @@ export function checkUnsupportedLatex(latex: string): string | null {
 /**
  * Converts LaTeX (from MathLive) to meval-compatible expression.
  * Handles common math notation: sin, cos, sqrt, frac, powers, etc.
+ * @param stripYPrefix - if true, removes "y = " prefix (for explicit y=f(x))
  */
-export function latexToMeval(latex: string): string {
+export function latexToMeval(latex: string, stripYPrefix = true): string {
   if (!latex || !latex.trim()) return '';
 
   let s = latex.trim();
 
   // Remove $$ or $ wrappers
   s = s.replace(/^\s*\$\$?\s*|\s*\$\$?\s*$/g, '').trim();
-  // Remove optional "y = " or "y=" prefix
-  s = s.replace(/^\s*y\s*=\s*/i, '').trim();
+  // Remove optional "y = " or "y=" prefix (explicit form only)
+  if (stripYPrefix) s = s.replace(/^\s*y\s*=\s*/i, '').trim();
 
   // \log_{10}(x) → \log(x) (상용로그)
   s = s.replace(/\\log_{10}/g, '\\log');
@@ -120,4 +148,24 @@ export function latexToMeval(latex: string): string {
   s = s.replace(/\\/g, '');
 
   return s.trim();
+}
+
+/**
+ * Converts implicit equation f(x,y)=0 LaTeX to meval: (left)-(right).
+ * e.g. "x^2+y^2-1=0" → "(x^2+y^2-1)-(0)", "x^2+y^2=1" → "(x^2+y^2)-(1)"
+ */
+export function latexToMevalImplicit(latex: string): string | null {
+  if (!latex || !latex.trim()) return null;
+
+  let s = latex.trim();
+  s = s.replace(/^\s*\$\$?\s*|\s*\$\$?\s*$/g, '').trim();
+
+  const parts = splitAtEquals(s);
+  if (!parts) return null;
+
+  const [left, right] = parts;
+  const leftMeval = latexToMeval(left, false);
+  const rightMeval = latexToMeval(right, false);
+
+  return `(${leftMeval})-(${rightMeval})`;
 }
