@@ -3,10 +3,10 @@ import 'mathlive';
 import { useGraphStore } from '../store/graphStore';
 import { calculateGraph, calculateImplicit } from '../api';
 import {
-  latexToMeval,
-  latexToMevalImplicit,
-  checkUnsupportedLatex,
-  detectFormulaType,
+    latexToMeval,
+    latexToMevalImplicit,
+    checkUnsupportedLatex,
+    detectFormulaType,
 } from '../utils/latexToMeval';
 import { POINTS_PER_VIEW, computeImplicitGridSize } from '../constants';
 import type { Theme } from '../store/themeStore';
@@ -228,7 +228,7 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
     return (
         <form className={styles.form} onSubmit={handleSubmit}>
             <div className={styles.row}>
-                <label htmlFor='formula'>수식 (y = f(x) 또는 f(x,y) = 0)</label>
+                <label htmlFor='formula'>수식 f:</label>
                 {React.createElement('math-field', {
                     ref: (el: HTMLElement | null) => {
                         mfRef.current = el as MathfieldElement | null;
@@ -291,76 +291,76 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                 </div>
             </div>
             {viewportMode === 'manual' && (
-            <div className={styles.rangeSection}>
-                <button
-                    type='button'
-                    className={styles.toggleBtn}
-                    onClick={() => setShowRange((v) => !v)}
-                    aria-expanded={showRange}
-                >
-                    {showRange ? '▼ 범위 설정 숨기기' : '▶ 범위 설정'}
-                </button>
-                {showRange && (
-                    <div className={styles.row}>
-                        <label htmlFor='xMin'>x 최소</label>
-                        <input
-                            id='xMin'
-                            type='number'
-                            value={xMin}
-                            onChange={(e) =>
-                                setRange2D(Number(e.target.value), xMax, yMin, yMax, step)
-                            }
-                            step='0.5'
-                            disabled={loading}
-                        />
-                        <label htmlFor='xMax'>x 최대</label>
-                        <input
-                            id='xMax'
-                            type='number'
-                            value={xMax}
-                            onChange={(e) =>
-                                setRange2D(xMin, Number(e.target.value), yMin, yMax, step)
-                            }
-                            step='0.5'
-                            disabled={loading}
-                        />
-                        <label htmlFor='yMin'>y 최소</label>
-                        <input
-                            id='yMin'
-                            type='number'
-                            value={yMin}
-                            onChange={(e) =>
-                                setRange2D(xMin, xMax, Number(e.target.value), yMax, step)
-                            }
-                            step='0.5'
-                            disabled={loading}
-                        />
-                        <label htmlFor='yMax'>y 최대</label>
-                        <input
-                            id='yMax'
-                            type='number'
-                            value={yMax}
-                            onChange={(e) =>
-                                setRange2D(xMin, xMax, yMin, Number(e.target.value), step)
-                            }
-                            step='0.5'
-                            disabled={loading}
-                        />
-                        <label htmlFor='step'>간격</label>
-                        <input
-                            id='step'
-                            type='number'
-                            value={step}
-                            onChange={(e) =>
-                                setRange2D(xMin, xMax, yMin, yMax, Number(e.target.value))
-                            }
-                            step='0.01'
-                            min='0.01'
-                            disabled={loading}
-                        />
-                    </div>
-                )}
-            </div>
+                <div className={styles.rangeSection}>
+                    <button
+                        type='button'
+                        className={styles.toggleBtn}
+                        onClick={() => setShowRange((v) => !v)}
+                        aria-expanded={showRange}
+                    >
+                        {showRange ? '▼ 범위 설정 숨기기' : '▶ 범위 설정'}
+                    </button>
+                    {showRange && (
+                        <div className={styles.row}>
+                            <label htmlFor='xMin'>x 최소</label>
+                            <input
+                                id='xMin'
+                                type='number'
+                                value={xMin}
+                                onChange={(e) =>
+                                    setRange2D(Number(e.target.value), xMax, yMin, yMax, step)
+                                }
+                                step='0.5'
+                                disabled={loading}
+                            />
+                            <label htmlFor='xMax'>x 최대</label>
+                            <input
+                                id='xMax'
+                                type='number'
+                                value={xMax}
+                                onChange={(e) =>
+                                    setRange2D(xMin, Number(e.target.value), yMin, yMax, step)
+                                }
+                                step='0.5'
+                                disabled={loading}
+                            />
+                            <label htmlFor='yMin'>y 최소</label>
+                            <input
+                                id='yMin'
+                                type='number'
+                                value={yMin}
+                                onChange={(e) =>
+                                    setRange2D(xMin, xMax, Number(e.target.value), yMax, step)
+                                }
+                                step='0.5'
+                                disabled={loading}
+                            />
+                            <label htmlFor='yMax'>y 최대</label>
+                            <input
+                                id='yMax'
+                                type='number'
+                                value={yMax}
+                                onChange={(e) =>
+                                    setRange2D(xMin, xMax, yMin, Number(e.target.value), step)
+                                }
+                                step='0.5'
+                                disabled={loading}
+                            />
+                            <label htmlFor='step'>간격</label>
+                            <input
+                                id='step'
+                                type='number'
+                                value={step}
+                                onChange={(e) =>
+                                    setRange2D(xMin, xMax, yMin, yMax, Number(e.target.value))
+                                }
+                                step='0.01'
+                                min='0.01'
+                                disabled={loading}
+                            />
+                        </div>
+                    )}
+                </div>
             )}
             <div className={styles.submitRow}>
                 <button type='submit' disabled={loading}>
