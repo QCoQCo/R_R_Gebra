@@ -3,6 +3,19 @@
   <a href="#ko">한국어</a> · <a href="#ja">日本語</a>
 </p>
 
+
+<p align="center">
+  <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react" alt="React 19">
+  <img src="https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Vite-6.x-646CFF?style=flat-square&logo=vite" alt="Vite">
+  <img src="https://img.shields.io/badge/Rust-1.x-CE422B?style=flat-square&logo=rust" alt="Rust">
+  <img src="https://img.shields.io/badge/Tauri-2.0-24C8DB?style=flat-square&logo=tauri" alt="Tauri 2.0">
+  <img src="https://img.shields.io/badge/Mafs-Graph-2E7D32?style=flat-square" alt="Mafs">
+  <img src="https://img.shields.io/badge/MathLive-LaTeX-00897B?style=flat-square" alt="MathLive">
+  <img src="https://img.shields.io/badge/Zustand-Store-443F48?style=flat-square" alt="Zustand">
+  <img src="https://img.shields.io/badge/SCSS-Modules-CC6699?style=flat-square&logo=sass" alt="SCSS">
+</p>
+
 ---
 
 <a id="ko"></a>
