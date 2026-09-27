@@ -3,7 +3,6 @@
   <a href="#ko">한국어</a> · <a href="#ja">日本語</a>
 </p>
 
-
 <p align="center">
   <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react" alt="React 19">
   <img src="https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript" alt="TypeScript">
