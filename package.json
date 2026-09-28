@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test:rust": "cd src-tauri && cargo test"
+    "test:rust": "cd src-tauri && cargo test",
+    "test": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -26,6 +27,7 @@
     "@vitejs/plugin-react": "^4.6.0",
     "sass": "^1.97.3",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^5.0.2"
   }
 }
