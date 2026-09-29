@@ -1,13 +1,10 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { Mafs, Coordinates, Plot, Theme } from 'mafs';
 import { useGraphStore } from '../store/graphStore';
 import type { Point } from '../store/graphStore';
-import type { ViewportBounds } from '../store/graphStore';
-import { calculateGraph, calculateImplicit } from '../api';
-import { POINTS_PER_VIEW, computeImplicitGridSize } from '../constants';
+import { DEFAULT_VIEW } from '../constants';
 import { ViewportObserver } from './ViewportObserver';
 import styles from './GraphCanvas.module.scss';
-const DEFAULT_VIEW: [number, number] = [-10, 10];
 
 /** 뷰포트 x 범위(span)에 따라 축 눈금 간격 반환. 겹침 방지 */
 function axisLineInterval(span: number): number {
@@ -46,14 +43,8 @@ export function GraphCanvas() {
         viewportMode,
         formula,
         viewportBounds,
-        getCachedPoints,
-        getCachedImplicit,
-        setCachedPoints,
-        setCachedImplicit,
-        setPoints,
-        setImplicitCurves,
-        setLoading,
-        setError,
+        recomputeToken,
+        compute,
         setViewportBounds,
     } = useGraphStore();
 
@@ -68,112 +59,11 @@ export function GraphCanvas() {
         return () => observer.disconnect();
     }, []);
 
-    const handleViewportBoundsChange = useCallback(
-        async (bounds: ViewportBounds) => {
-            if (bounds.xMax <= bounds.xMin || bounds.yMax <= bounds.yMin) return;
-            setViewportBounds(bounds);
-            if (!formula.trim()) return;
-
-            if (formulaType === 'explicit') {
-                const span = bounds.xMax - bounds.xMin;
-                const step = span / POINTS_PER_VIEW;
-                const cached = getCachedPoints(formula, bounds.xMin, bounds.xMax, step);
-                if (cached) {
-                    setPoints(cached);
-                    return;
-                }
-                setLoading(true);
-                setError(null);
-                try {
-                    const newPoints = await calculateGraph({
-                        formula,
-                        x_min: bounds.xMin,
-                        x_max: bounds.xMax,
-                        step,
-                    });
-                    setCachedPoints(formula, bounds.xMin, bounds.xMax, step, newPoints);
-                    setPoints(newPoints);
-                } catch (err) {
-                    setError(err instanceof Error ? err.message : String(err));
-                }
-            } else {
-                const gridSize = computeImplicitGridSize(bounds);
-                const cached = getCachedImplicit(
-                    formula,
-                    bounds.xMin,
-                    bounds.xMax,
-                    bounds.yMin,
-                    bounds.yMax,
-                    gridSize
-                );
-                if (cached) {
-                    setImplicitCurves(cached);
-                    return;
-                }
-                setLoading(true);
-                setError(null);
-                try {
-                    const curves = await calculateImplicit({
-                        formula,
-                        x_min: bounds.xMin,
-                        x_max: bounds.xMax,
-                        y_min: bounds.yMin,
-                        y_max: bounds.yMax,
-                        grid_size: gridSize,
-                    });
-                    setCachedImplicit(
-                        formula,
-                        bounds.xMin,
-                        bounds.xMax,
-                        bounds.yMin,
-                        bounds.yMax,
-                        gridSize,
-                        curves
-                    );
-                    setImplicitCurves(curves);
-                } catch (err) {
-                    setError(err instanceof Error ? err.message : String(err));
-                }
-            }
-        },
-        [
-            formula,
-            formulaType,
-            getCachedPoints,
-            getCachedImplicit,
-            setCachedPoints,
-            setCachedImplicit,
-            setPoints,
-            setImplicitCurves,
-            setLoading,
-            setError,
-            setViewportBounds,
-        ],
-    );
-
-    // auto 모드: formula가 있고 viewportBounds가 아직 없을 때 초기 계산 (ViewportObserver 250ms 대기 전)
+    // 수식·모드·뷰포트가 바뀌거나 "그래프 그리기"를 누르면 재계산.
+    // manual 모드의 범위 입력은 "그래프 그리기"로 반영 (입력 중 값마다 계산하지 않음).
     useEffect(() => {
-        if (
-            viewportMode !== 'auto' ||
-            !formula.trim() ||
-            viewportBounds !== null ||
-            loading
-        )
-            return;
-        const initialBounds: ViewportBounds = {
-            xMin: DEFAULT_VIEW[0],
-            xMax: DEFAULT_VIEW[1],
-            yMin: DEFAULT_VIEW[0],
-            yMax: DEFAULT_VIEW[1],
-        };
-        handleViewportBoundsChange(initialBounds);
-    }, [
-        viewportMode,
-        formula,
-        viewportBounds,
-        loading,
-        handleViewportBoundsChange,
-    ]);
+        compute();
+    }, [formula, formulaType, viewportMode, viewportBounds, recomputeToken, compute]);
 
     const viewBox =
         viewportMode === 'manual'
@@ -194,11 +84,11 @@ export function GraphCanvas() {
 
     return (
         <div ref={containerRef} className={styles.canvas}>
-            {(loading || pending) && (
+            {(loading || (pending && formula.trim() !== '')) && (
                 <div
                     className={styles.loadingOverlay}
                     aria-live='polite'
-                    data-pending={pending && !loading}
+                    data-pending={!loading}
                 >
                     <span className={styles.loadingSpinner} />
                     <span>{loading ? '계산 중...' : '준비 중...'}</span>
@@ -212,12 +102,11 @@ export function GraphCanvas() {
                 zoom={{ min: 0.1, max: 10 }}
                 pan={true}
             >
-                {viewportMode === 'auto' && formula.trim() && (
+                {viewportMode === 'auto' && (
                     <ViewportObserver
                         width={size.width}
                         height={size.height}
-                        formula={formula}
-                        onBoundsChange={handleViewportBoundsChange}
+                        onBoundsChange={setViewportBounds}
                         onPendingChange={setPending}
                         debounceMs={250}
                     />

@@ -1,5 +1,16 @@
 import type { ViewportBounds } from './store/graphStore';
 
+/** 그래프 기본 표시 범위 (x, y 공통) */
+export const DEFAULT_VIEW: [number, number] = [-10, 10];
+
+/** 뷰포트를 아직 모를 때(auto 모드 첫 계산) 쓰는 범위 */
+export const DEFAULT_BOUNDS: ViewportBounds = {
+  xMin: DEFAULT_VIEW[0],
+  xMax: DEFAULT_VIEW[1],
+  yMin: DEFAULT_VIEW[0],
+  yMax: DEFAULT_VIEW[1],
+};
+
 /** explicit y=f(x) 그래프: 뷰포트당 샘플 수 */
 export const POINTS_PER_VIEW = 500;
 

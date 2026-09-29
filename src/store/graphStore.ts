@@ -1,10 +1,14 @@
 import { create } from 'zustand';
-import { MAX_CACHE_ENTRIES } from '../constants';
+import { calculateGraph, calculateImplicit } from '../api';
+import type { Point } from '../api';
+import {
+  DEFAULT_BOUNDS,
+  MAX_CACHE_ENTRIES,
+  POINTS_PER_VIEW,
+  computeImplicitGridSize,
+} from '../constants';
 
-export interface Point {
-  x: number;
-  y: number;
-}
+export type { Point };
 
 /** 뷰포트 자동: 줌/팬한 구간만 계산. 수동: 사용자가 x_min, x_max 입력 */
 export type ViewportMode = 'auto' | 'manual';
@@ -43,6 +47,22 @@ function makeImplicitCacheKey(
   return `${formula}|${xMin}|${xMax}|${yMin}|${yMax}|${gridSize}`;
 }
 
+/** 새 엔트리를 추가한 캐시 사본. MAX_CACHE_ENTRIES 초과 시 가장 오래된 엔트리 제거 */
+function withCacheEntry<K, V>(cache: Map<K, V>, key: K, value: V): Map<K, V> {
+  const next = new Map(cache).set(key, value);
+  if (next.size > MAX_CACHE_ENTRIES) {
+    const firstKey = next.keys().next().value;
+    if (firstKey !== undefined) next.delete(firstKey);
+  }
+  return next;
+}
+
+/**
+ * 가장 최근 compute 호출 번호. 응답이 도착했을 때 이 값과 다르면
+ * 더 새로운 요청이 있다는 뜻이므로 결과를 버린다 (응답 순서 역전 방지).
+ */
+let latestRequestId = 0;
+
 interface GraphState {
   formula: string;
   formulaType: FormulaType;
@@ -57,37 +77,25 @@ interface GraphState {
   error: string | null;
   viewportMode: ViewportMode;
   viewportBounds: ViewportBounds | null;
+  /** "그래프 그리기"를 누를 때마다 증가. 수식이 같아도 다시 계산하게 하는 트리거 */
+  recomputeToken: number;
   graphCache: Map<GraphCacheKey, Point[]>;
   implicitCache: Map<ImplicitCacheKey, Point[][]>;
-  setFormula: (formula: string) => void;
-  setFormulaType: (type: FormulaType) => void;
-  setRange: (xMin: number, xMax: number, step: number) => void;
+  /** 입력 중 수식 반영 (디바운스된 실시간 입력) */
+  setExpression: (formula: string, formulaType: FormulaType) => void;
+  /** "그래프 그리기": 수식 반영 + 강제 재계산 */
+  submitExpression: (formula: string, formulaType: FormulaType) => void;
   setRange2D: (xMin: number, xMax: number, yMin: number, yMax: number, step: number) => void;
-  setPoints: (points: Point[]) => void;
-  setImplicitCurves: (curves: Point[][]) => void;
-  setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   setViewportMode: (mode: ViewportMode) => void;
   setViewportBounds: (bounds: ViewportBounds | null) => void;
-  getCachedPoints: (formula: string, xMin: number, xMax: number, step: number) => Point[] | null;
-  setCachedPoints: (formula: string, xMin: number, xMax: number, step: number, points: Point[]) => void;
-  getCachedImplicit: (
-    formula: string,
-    xMin: number,
-    xMax: number,
-    yMin: number,
-    yMax: number,
-    gridSize: number
-  ) => Point[][] | null;
-  setCachedImplicit: (
-    formula: string,
-    xMin: number,
-    xMax: number,
-    yMin: number,
-    yMax: number,
-    gridSize: number,
-    curves: Point[][]
-  ) => void;
+  /**
+   * 현재 수식·모드·범위로 그래프를 계산한다. 모든 계산은 이 함수를 거친다.
+   * - auto 모드: 현재 뷰포트(없으면 기본 범위), manual 모드: 입력한 범위
+   * - 캐시에 있으면 바로 반영, 없으면 백엔드 호출
+   * - 더 최신 호출이 있으면 결과를 버림
+   */
+  compute: () => Promise<void>;
   invalidateCache: () => void;
   reset: () => void;
 }
@@ -106,53 +114,72 @@ const defaultState = {
   error: null as string | null,
   viewportMode: 'auto' as ViewportMode,
   viewportBounds: null as ViewportBounds | null,
+  recomputeToken: 0,
   graphCache: new Map<GraphCacheKey, Point[]>(),
   implicitCache: new Map<ImplicitCacheKey, Point[][]>(),
 };
 
 export const useGraphStore = create<GraphState>((set, get) => ({
   ...defaultState,
-  setFormula: (formula) => set({ formula, error: null }),
-  setFormulaType: (formulaType) => set({ formulaType }),
-  setRange: (xMin, xMax, step) =>
-    set({ xMin, xMax, step, error: null }),
+  setExpression: (formula, formulaType) => set({ formula, formulaType, error: null }),
+  submitExpression: (formula, formulaType) =>
+    set((s) => ({ formula, formulaType, error: null, recomputeToken: s.recomputeToken + 1 })),
   setRange2D: (xMin, xMax, yMin, yMax, step) =>
     set({ xMin, xMax, yMin, yMax, step, error: null }),
-  setPoints: (points) => set({ points, implicitCurves: [], loading: false, error: null }),
-  setImplicitCurves: (implicitCurves) => set({ implicitCurves, points: [], loading: false, error: null }),
-  setLoading: (loading) => set({ loading, error: loading ? null : undefined }),
   setError: (error) => set({ error, loading: false }),
   setViewportMode: (mode) => set({ viewportMode: mode }),
   setViewportBounds: (bounds) => set({ viewportBounds: bounds }),
-  getCachedPoints: (formula, xMin, xMax, step) => {
-    const key = makeCacheKey(formula, xMin, xMax, step);
-    return get().graphCache.get(key) ?? null;
-  },
-  setCachedPoints: (formula, xMin, xMax, step, points) => {
-    const key = makeCacheKey(formula, xMin, xMax, step);
-    set((s) => {
-      const next = new Map(s.graphCache).set(key, points);
-      if (next.size > MAX_CACHE_ENTRIES) {
-        const firstKey = next.keys().next().value;
-        if (firstKey !== undefined) next.delete(firstKey);
+  compute: async () => {
+    const id = ++latestRequestId;
+    const isLatest = () => id === latestRequestId;
+    const s = get();
+    const formula = s.formula.trim();
+
+    if (!formula) {
+      set({ points: [], implicitCurves: [], loading: false, error: null });
+      return;
+    }
+
+    const bounds: ViewportBounds =
+      s.viewportMode === 'manual'
+        ? { xMin: s.xMin, xMax: s.xMax, yMin: s.yMin, yMax: s.yMax }
+        : (s.viewportBounds ?? DEFAULT_BOUNDS);
+    const { xMin, xMax, yMin, yMax } = bounds;
+
+    try {
+      if (s.formulaType === 'explicit') {
+        const step = s.viewportMode === 'manual' ? s.step : (xMax - xMin) / POINTS_PER_VIEW;
+        const key = makeCacheKey(formula, xMin, xMax, step);
+        let points = s.graphCache.get(key);
+        if (!points) {
+          set({ loading: true, error: null });
+          points = await calculateGraph({ formula, x_min: xMin, x_max: xMax, step });
+          const result = points;
+          set((st) => ({ graphCache: withCacheEntry(st.graphCache, key, result) }));
+        }
+        if (isLatest()) set({ points, implicitCurves: [], loading: false, error: null });
+      } else {
+        const gridSize = computeImplicitGridSize(bounds);
+        const key = makeImplicitCacheKey(formula, xMin, xMax, yMin, yMax, gridSize);
+        let curves = s.implicitCache.get(key);
+        if (!curves) {
+          set({ loading: true, error: null });
+          curves = await calculateImplicit({
+            formula,
+            x_min: xMin,
+            x_max: xMax,
+            y_min: yMin,
+            y_max: yMax,
+            grid_size: gridSize,
+          });
+          const result = curves;
+          set((st) => ({ implicitCache: withCacheEntry(st.implicitCache, key, result) }));
+        }
+        if (isLatest()) set({ implicitCurves: curves, points: [], loading: false, error: null });
       }
-      return { graphCache: next };
-    });
-  },
-  getCachedImplicit: (formula, xMin, xMax, yMin, yMax, gridSize) => {
-    const key = makeImplicitCacheKey(formula, xMin, xMax, yMin, yMax, gridSize);
-    return get().implicitCache.get(key) ?? null;
-  },
-  setCachedImplicit: (formula, xMin, xMax, yMin, yMax, gridSize, curves) => {
-    const key = makeImplicitCacheKey(formula, xMin, xMax, yMin, yMax, gridSize);
-    set((s) => {
-      const next = new Map(s.implicitCache).set(key, curves);
-      if (next.size > MAX_CACHE_ENTRIES) {
-        const firstKey = next.keys().next().value;
-        if (firstKey !== undefined) next.delete(firstKey);
-      }
-      return { implicitCache: next };
-    });
+    } catch (err) {
+      if (isLatest()) set({ error: err instanceof Error ? err.message : String(err), loading: false });
+    }
   },
   invalidateCache: () => set({ graphCache: new Map(), implicitCache: new Map() }),
   reset: () =>

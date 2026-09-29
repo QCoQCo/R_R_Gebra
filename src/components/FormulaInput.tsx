@@ -1,14 +1,13 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import 'mathlive';
 import { useGraphStore } from '../store/graphStore';
-import { calculateGraph, calculateImplicit } from '../api';
+import type { FormulaType } from '../store/graphStore';
 import {
     latexToMeval,
     latexToMevalImplicit,
     checkUnsupportedLatex,
     detectFormulaType,
 } from '../utils/latexToMeval';
-import { POINTS_PER_VIEW, computeImplicitGridSize } from '../constants';
 import type { Theme } from '../store/themeStore';
 import styles from './FormulaInput.module.scss';
 
@@ -20,6 +19,13 @@ interface FormulaInputProps {
 interface MathfieldElement extends HTMLElement {
     value: string;
     mathVirtualKeyboardPolicy: string;
+}
+
+/** math-field 의 LaTeX → (meval 수식, 수식 타입). 빈 입력이면 formula 는 '' */
+function parseLatex(latex: string): { formula: string; type: FormulaType } {
+    const type = detectFormulaType(latex);
+    const formula = type === 'implicit' ? latexToMevalImplicit(latex) : latexToMeval(latex);
+    return { formula: formula?.trim() ?? '', type };
 }
 
 export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
@@ -34,83 +40,13 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
         step,
         loading,
         error,
-        formula,
         viewportMode,
         setRange2D,
-        setPoints,
-        setImplicitCurves,
-        setLoading,
         setError,
-        setFormula,
-        setFormulaType,
-        setCachedPoints,
-        setCachedImplicit,
+        setExpression,
+        submitExpression,
         setViewportMode,
     } = useGraphStore();
-
-    const effectiveStep = viewportMode === 'auto' ? (xMax - xMin) / POINTS_PER_VIEW : step;
-
-    const recalculateWithManualRange = useCallback(async () => {
-        const latex = mfRef.current?.value ?? '';
-        if (checkUnsupportedLatex(latex)) return;
-        const type = detectFormulaType(latex);
-        setFormulaType(type);
-
-        if (type === 'explicit') {
-            const mevalExpr = latexToMeval(latex);
-            if (!mevalExpr.trim()) return;
-            setFormula(mevalExpr.trim());
-            setLoading(true);
-            setError(null);
-            try {
-                const pts = await calculateGraph({
-                    formula: mevalExpr.trim(),
-                    x_min: xMin,
-                    x_max: xMax,
-                    step,
-                });
-                setCachedPoints(mevalExpr.trim(), xMin, xMax, step, pts);
-                setPoints(pts);
-            } catch (err) {
-                setError(err instanceof Error ? err.message : String(err));
-            }
-        } else {
-            const mevalExpr = latexToMevalImplicit(latex);
-            if (!mevalExpr) return;
-            setFormula(mevalExpr);
-            setLoading(true);
-            setError(null);
-            const gridSize = computeImplicitGridSize({ xMin, xMax, yMin, yMax });
-            try {
-                const curves = await calculateImplicit({
-                    formula: mevalExpr,
-                    x_min: xMin,
-                    x_max: xMax,
-                    y_min: yMin,
-                    y_max: yMax,
-                    grid_size: gridSize,
-                });
-                setCachedImplicit(mevalExpr, xMin, xMax, yMin, yMax, gridSize, curves);
-                setImplicitCurves(curves);
-            } catch (err) {
-                setError(err instanceof Error ? err.message : String(err));
-            }
-        }
-    }, [
-        xMin,
-        xMax,
-        yMin,
-        yMax,
-        step,
-        setFormula,
-        setFormulaType,
-        setLoading,
-        setError,
-        setCachedPoints,
-        setCachedImplicit,
-        setPoints,
-        setImplicitCurves,
-    ]);
 
     useEffect(() => {
         const el = mfRef.current;
@@ -127,12 +63,8 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                 debounceTimer = null;
                 const latex = (el as MathfieldElement).value ?? '';
                 if (checkUnsupportedLatex(latex)) return;
-                const type = detectFormulaType(latex);
-                const mevalExpr =
-                    type === 'implicit' ? latexToMevalImplicit(latex) : latexToMeval(latex);
-                if (!mevalExpr?.trim()) return;
-                setFormulaType(type);
-                setFormula(mevalExpr.trim());
+                const { formula, type } = parseLatex(latex);
+                setExpression(formula, type);
             }, DEBOUNCE_MS);
         };
 
@@ -162,17 +94,9 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
             el.removeEventListener('focusin', showKb);
             el.removeEventListener('focusout', hideKb);
         };
-    }, [setFormula, setFormulaType]);
+    }, [setExpression]);
 
-    const prevModeRef = useRef(viewportMode);
-    useEffect(() => {
-        if (viewportMode === 'manual' && prevModeRef.current === 'auto' && formula.trim()) {
-            recalculateWithManualRange();
-        }
-        prevModeRef.current = viewportMode;
-    }, [viewportMode, formula, recalculateWithManualRange]);
-
-    async function handleSubmit(e: React.FormEvent) {
+    function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
         const latex = mfRef.current?.value ?? '';
         const unsupported = checkUnsupportedLatex(latex);
@@ -180,49 +104,8 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
             setError(unsupported);
             return;
         }
-        const type = detectFormulaType(latex);
-        setFormulaType(type);
-
-        if (type === 'explicit') {
-            const mevalExpr = latexToMeval(latex);
-            if (!mevalExpr.trim()) return;
-            setFormula(mevalExpr.trim());
-            setLoading(true);
-            setError(null);
-            try {
-                const pts = await calculateGraph({
-                    formula: mevalExpr.trim(),
-                    x_min: xMin,
-                    x_max: xMax,
-                    step: effectiveStep,
-                });
-                setCachedPoints(mevalExpr.trim(), xMin, xMax, effectiveStep, pts);
-                setPoints(pts);
-            } catch (err) {
-                setError(err instanceof Error ? err.message : String(err));
-            }
-        } else {
-            const mevalExpr = latexToMevalImplicit(latex);
-            if (!mevalExpr) return;
-            setFormula(mevalExpr);
-            setLoading(true);
-            setError(null);
-            const gridSize = computeImplicitGridSize({ xMin, xMax, yMin, yMax });
-            try {
-                const curves = await calculateImplicit({
-                    formula: mevalExpr,
-                    x_min: xMin,
-                    x_max: xMax,
-                    y_min: yMin,
-                    y_max: yMax,
-                    grid_size: gridSize,
-                });
-                setCachedImplicit(mevalExpr, xMin, xMax, yMin, yMax, gridSize, curves);
-                setImplicitCurves(curves);
-            } catch (err) {
-                setError(err instanceof Error ? err.message : String(err));
-            }
-        }
+        const { formula, type } = parseLatex(latex);
+        submitExpression(formula, type);
     }
 
     return (
@@ -236,7 +119,6 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                     id: 'formula',
                     className: styles.mathField,
                     'math-virtual-keyboard-policy': 'manual',
-                    disabled: loading,
                 })}
             </div>
             <div className={styles.controlPanel}>
@@ -311,7 +193,6 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                                     setRange2D(Number(e.target.value), xMax, yMin, yMax, step)
                                 }
                                 step='0.5'
-                                disabled={loading}
                             />
                             <label htmlFor='xMax'>x 최대</label>
                             <input
@@ -322,7 +203,6 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                                     setRange2D(xMin, Number(e.target.value), yMin, yMax, step)
                                 }
                                 step='0.5'
-                                disabled={loading}
                             />
                             <label htmlFor='yMin'>y 최소</label>
                             <input
@@ -333,7 +213,6 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                                     setRange2D(xMin, xMax, Number(e.target.value), yMax, step)
                                 }
                                 step='0.5'
-                                disabled={loading}
                             />
                             <label htmlFor='yMax'>y 최대</label>
                             <input
@@ -344,7 +223,6 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                                     setRange2D(xMin, xMax, yMin, Number(e.target.value), step)
                                 }
                                 step='0.5'
-                                disabled={loading}
                             />
                             <label htmlFor='step'>간격</label>
                             <input
@@ -356,14 +234,13 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                                 }
                                 step='0.01'
                                 min='0.01'
-                                disabled={loading}
                             />
                         </div>
                     )}
                 </div>
             )}
             <div className={styles.submitRow}>
-                <button type='submit' disabled={loading}>
+                <button type='submit'>
                     {loading && <span className={styles.spinner} aria-hidden />}
                     {loading ? '계산 중...' : '그래프 그리기'}
                 </button>

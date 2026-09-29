@@ -273,7 +273,10 @@ pub fn calculate_implicit(request: ImplicitRequest) -> Result<Vec<Vec<Point>>, S
             };
             for seg in edges {
                 if let (Some(p1), Some(p2)) = (edge_points(seg.0), edge_points(seg.1)) {
-                    segments.push((p1, p2));
+                    // 꼭짓점이 정확히 곡선 위(f=0)면 두 끝점이 같은 길이 0 선분이 생김
+                    if !point_eq(&p1, &p2, SEGMENT_EPS) {
+                        segments.push((p1, p2));
+                    }
                 }
             }
         }
@@ -284,12 +287,15 @@ pub fn calculate_implicit(request: ImplicitRequest) -> Result<Vec<Vec<Point>>, S
     Ok(curves)
 }
 
+/// 선분 끝점을 같은 점으로 볼 허용 오차
+const SEGMENT_EPS: f64 = 1e-10;
+
 fn point_eq(a: &Point, b: &Point, eps: f64) -> bool {
     (a.x - b.x).abs() < eps && (a.y - b.y).abs() < eps
 }
 
 fn connect_segments(mut segments: Vec<(Point, Point)>) -> Vec<Vec<Point>> {
-    const EPS: f64 = 1e-10;
+    const EPS: f64 = SEGMENT_EPS;
     let mut curves: Vec<Vec<Point>> = Vec::new();
 
         while let Some((start, end)) = segments.pop() {
@@ -573,6 +579,20 @@ mod implicit_tests {
         assert_eq!(curves.len(), 2, "xy=0 should form 2 curves, got {}", curves.len());
         assert_open_ends_on_boundary("x^2-y^2", -1.0, 1.0, -0.97, 1.03, 21);
         assert_open_ends_on_boundary("sin(3*x)*sin(3*y)", -2.03, 1.97, -2.03, 1.97, 41);
+    }
+
+    #[test]
+    fn test_curve_through_grid_vertices_has_no_zero_length_pieces() {
+        // 대칭 범위에서는 대각선 위 꼭짓점이 모두 f=0 → 예전엔 길이 0 조각 49개가 섞여 나옴
+        let curves = calculate_implicit(imp_req("(x^(2)-y^(2))-(0)", -10.0, 10.0, -10.0, 10.0, 240)).unwrap();
+        assert_eq!(curves.len(), 2, "expected 2 curves, got {}", curves.len());
+        for curve in &curves {
+            let length: f64 = curve
+                .windows(2)
+                .map(|w| ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt())
+                .sum();
+            assert!(length > 1.0, "zero-length curve: {:?}", curve);
+        }
     }
 
     #[test]

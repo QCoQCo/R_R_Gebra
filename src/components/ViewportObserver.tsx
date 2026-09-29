@@ -28,7 +28,6 @@ function clampBounds(bounds: ViewportBounds): ViewportBounds {
 interface ViewportObserverProps {
   width: number;
   height: number;
-  formula: string;
   onBoundsChange: (bounds: ViewportBounds) => void;
   onPendingChange?: (pending: boolean) => void;
   debounceMs?: number;
@@ -41,7 +40,6 @@ interface ViewportObserverProps {
 export function ViewportObserver({
   width,
   height,
-  formula,
   onBoundsChange,
   onPendingChange,
   debounceMs = 250,
@@ -76,7 +74,7 @@ export function ViewportObserver({
         timeoutRef.current = null;
       }
     };
-  }, [width, height, formula, xMin, xMax, yMin, yMax, onBoundsChange, onPendingChange, debounceMs]);
+  }, [width, height, xMin, xMax, yMin, yMax, onBoundsChange, onPendingChange, debounceMs]);
 
   return null;
 }
