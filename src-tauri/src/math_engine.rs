@@ -94,18 +94,31 @@ const MS_EDGES: &[&[(u8, u8)]] = &[
     &[(1, 2)],        // 2
     &[(1, 3)],        // 3
     &[(0, 1)],        // 4
-    &[(0, 3), (1, 2)], // 5: saddle
+    &[(0, 3), (1, 2)], // 5: saddle (실제 선분은 saddle_edges에서 결정)
     &[(0, 2)],        // 6
     &[(0, 3)],        // 7
     &[(0, 3)],        // 8
     &[(0, 2)],        // 9
-    &[(0, 1), (2, 3)], // 10: saddle
+    &[(0, 1), (2, 3)], // 10: saddle (실제 선분은 saddle_edges에서 결정)
     &[(0, 1)],        // 11
     &[(1, 3)],        // 12
     &[(1, 2)],        // 13
     &[(2, 3)],        // 14
     &[],              // 15: all above
 ];
+
+/// Saddle 셀(case 5: bl·tr 위, case 10: br·tl 위)은 항상 선분 2개가 필요하다.
+/// 셀 중심값의 부호로 어느 코너 쌍이 이어져 있는지 판단해 연결 방식을 고른다.
+/// - 중심이 위 → 위 코너끼리 이어짐 → 아래 코너 2개를 각각 잘라내는 선분
+/// - 중심이 아래 → 아래 코너끼리 이어짐 → 위 코너 2개를 각각 잘라내는 선분
+fn saddle_edges(idx: u8, center_above: bool) -> &'static [(u8, u8)] {
+    match (idx, center_above) {
+        // tl(top,left) + br(right,bottom) 을 잘라냄
+        (5, true) | (10, false) => &[(0, 3), (1, 2)],
+        // tr(top,right) + bl(bottom,left) 을 잘라냄
+        _ => &[(0, 1), (2, 3)],
+    }
+}
 
 /// Parses f(x,y)=0 formula (left - right). Expects "left" or "left - right" or "left = right".
 fn parse_implicit_formula(s: &str) -> Result<String, String> {
@@ -250,22 +263,17 @@ pub fn calculate_implicit(request: ImplicitRequest) -> Result<Vec<Vec<Point>>, S
                 }
             };
 
-            let edges = MS_EDGES[idx as usize];
-            if idx == 5 || idx == 10 {
-                let avg = (v00 + v10 + v11 + v01) / 4.0;
-                let above_avg = avg >= 0.0;
-                let use_first = (idx == 5 && above_avg) || (idx == 10 && !above_avg);
-                let segs = if use_first { &edges[0..1] } else { &edges[1..2] };
-                for seg in segs {
-                    if let (Some(p1), Some(p2)) = (edge_points(seg.0), edge_points(seg.1)) {
-                        segments.push((p1, p2));
-                    }
-                }
+            let edges = if idx == 5 || idx == 10 {
+                // 중심을 직접 평가하고, 정의되지 않으면 네 꼭짓점 평균으로 대체
+                let center = eval_cell(&func, (x0 + x1) / 2.0, (y0 + y1) / 2.0)
+                    .unwrap_or((v00 + v10 + v11 + v01) / 4.0);
+                saddle_edges(idx, center >= 0.0)
             } else {
-                for seg in edges {
-                    if let (Some(p1), Some(p2)) = (edge_points(seg.0), edge_points(seg.1)) {
-                        segments.push((p1, p2));
-                    }
+                MS_EDGES[idx as usize]
+            };
+            for seg in edges {
+                if let (Some(p1), Some(p2)) = (edge_points(seg.0), edge_points(seg.1)) {
+                    segments.push((p1, p2));
                 }
             }
         }
@@ -514,6 +522,57 @@ mod implicit_tests {
     fn test_implicit_empty() {
         let r = calculate_implicit(imp_req("", -1.0, 1.0, -1.0, 1.0, 20));
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_saddle_cell_emits_two_segments() {
+        // 셀 1개(grid 2)짜리 saddle: 쌍곡선 xy = ±0.1 의 두 가지가 각각 선분 하나씩
+        for formula in ["x*y+0.1", "x*y-0.1", "-x*y+0.1", "-x*y-0.1"] {
+            let curves = calculate_implicit(imp_req(formula, -1.0, 1.0, -1.0, 1.0, 2)).unwrap();
+            assert_eq!(curves.len(), 2, "{}: expected 2 segments, got {:?}", formula, curves);
+            // 연결 쌍이 맞으면 각 선분은 한 사분면 안에 있음 (중심을 가로지르지 않음)
+            for curve in &curves {
+                let (a, b) = (&curve[0], &curve[curve.len() - 1]);
+                assert!(
+                    a.x.signum() == b.x.signum() && a.y.signum() == b.y.signum(),
+                    "{}: segment crosses quadrants: ({}, {}) - ({}, {})",
+                    formula, a.x, a.y, b.x, b.y
+                );
+            }
+        }
+    }
+
+    /// 열린 곡선의 양 끝은 영역 경계 위에 있어야 한다. 내부에서 끊기면 선분이 누락된 것.
+    fn assert_open_ends_on_boundary(formula: &str, x_min: f64, x_max: f64, y_min: f64, y_max: f64, grid: u32) -> Vec<Vec<Point>> {
+        let curves = calculate_implicit(imp_req(formula, x_min, x_max, y_min, y_max, grid)).unwrap();
+        let eps = 1e-9;
+        let on_boundary = |p: &Point| {
+            (p.x - x_min).abs() < eps
+                || (p.x - x_max).abs() < eps
+                || (p.y - y_min).abs() < eps
+                || (p.y - y_max).abs() < eps
+        };
+        for curve in &curves {
+            let (a, b) = (&curve[0], &curve[curve.len() - 1]);
+            if point_eq(a, b, eps) {
+                continue; // 닫힌 곡선
+            }
+            assert!(
+                on_boundary(a) && on_boundary(b),
+                "{}: curve ends inside domain: ({}, {}) .. ({}, {})",
+                formula, a.x, a.y, b.x, b.y
+            );
+        }
+        curves
+    }
+
+    #[test]
+    fn test_crossing_curves_have_no_gaps() {
+        // 격자 꼭짓점이 곡선 위에 정확히 놓이지 않도록 범위를 살짝 어긋나게 잡음
+        let curves = assert_open_ends_on_boundary("x*y", -1.05, 0.95, -1.05, 0.95, 21);
+        assert_eq!(curves.len(), 2, "xy=0 should form 2 curves, got {}", curves.len());
+        assert_open_ends_on_boundary("x^2-y^2", -1.0, 1.0, -0.97, 1.03, 21);
+        assert_open_ends_on_boundary("sin(3*x)*sin(3*y)", -2.03, 1.97, -2.03, 1.97, 41);
     }
 
     #[test]
