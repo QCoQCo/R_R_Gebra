@@ -21,10 +21,11 @@ export interface ImplicitRequest {
   grid_size: number;
 }
 
+/** y=f(x) 샘플링. 점근선·정의되지 않는 구간에서 끊긴 연속 구간 목록을 반환 */
 export async function calculateGraph(
   request: GraphRequest
-): Promise<Point[]> {
-  return invoke<Point[]>('calculate_graph', {
+): Promise<Point[][]> {
+  return invoke<Point[][]>('calculate_graph', {
     request: {
       formula: request.formula,
       x_min: request.x_min,

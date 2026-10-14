@@ -36,10 +36,59 @@ pub struct GraphRequest {
     pub step: f64,
 }
 
-/// Parses formula string, optionally stripping "y = " prefix.
-/// Evaluates for each x in range and returns points.
-/// Skips points where y is inf/nan.
-pub fn calculate_graph(request: GraphRequest) -> Result<Vec<Point>, String> {
+/// y=f(x) 한 번 계산에 허용하는 최대 샘플 수 (수동 모드의 넓은 범위·작은 간격으로 인한 프리징 방지)
+pub const MAX_GRAPH_SAMPLES: usize = 100_000;
+
+/// 암시적 방정식 격자 한 변의 최대 크기 (grid_size² 번 평가)
+pub const MAX_GRID_SIZE: u32 = 1024;
+
+/// 불연속 판정 시 구간을 좁혀 들어가는 최대 횟수
+const DISCONTINUITY_BISECTIONS: usize = 30;
+
+/// 불연속 판정 시 구간을 나누는 비율. 정확히 가운데(0.5)면 원래 샘플 격자 위의
+/// 점(예: sin(x)/x 의 x=0)을 다시 밟으므로 살짝 비켜 나눈다.
+const DISCONTINUITY_SPLIT: f64 = 0.49;
+
+/// [x_min, x_max]를 step 간격으로 나눈 샘플 위치.
+/// 누적 오차가 없도록 x_min + i·step 으로 계산하고, 마지막 샘플은 항상 x_max
+/// (나누어떨어지지 않으면 마지막 간격만 짧아짐).
+fn sample_positions(x_min: f64, x_max: f64, step: f64) -> impl Iterator<Item = f64> {
+    let intervals = (((x_max - x_min) / step) - 1e-9).ceil().max(1.0) as usize;
+    (0..=intervals).map(move |i| if i == intervals { x_max } else { x_min + i as f64 * step })
+}
+
+/// 인접한 두 샘플 a, b 사이가 끊겨 있는지(점근선, 계단 등) 판정한다.
+/// 변화가 큰 쪽으로 구간을 계속 좁혀 들어가며, 연속 함수면 변화량이 구간과 함께 줄어들고
+/// 불연속이면 줄지 않거나(계단) 커지거나(점근선) 도중에 정의되지 않는 점을 만난다.
+fn is_discontinuous(f: &dyn Fn(f64) -> f64, mut a: Point, mut b: Point) -> bool {
+    // 값 크기에 비해 아주 작은 변화(부동소수점 잡음 수준)는 연속으로 본다.
+    // a, b가 같은 값이어도(1/x² 를 대칭으로 샘플링) 사이에 점근선이 있을 수 있으므로 0을 기준으로 두지 않음.
+    let scale = a.y.abs().max(b.y.abs()).max(1.0);
+    let threshold = 0.1 * (b.y - a.y).abs().max(1e-6 * scale);
+
+    for _ in 0..DISCONTINUITY_BISECTIONS {
+        let xm = a.x + (b.x - a.x) * DISCONTINUITY_SPLIT;
+        let ym = f(xm);
+        if !ym.is_finite() {
+            return true;
+        }
+        let m = Point { x: xm, y: ym };
+        if (m.y - a.y).abs() >= (b.y - m.y).abs() {
+            b = m;
+        } else {
+            a = m;
+        }
+        if (b.y - a.y).abs() < threshold {
+            return false;
+        }
+    }
+    true
+}
+
+/// Parses formula string, optionally stripping "y = " prefix, and samples y=f(x) over [x_min, x_max].
+/// Returns continuous pieces of the curve: a new piece starts where y is undefined (inf/nan)
+/// or the function jumps (asymptote, step), so the frontend never draws lines across them.
+pub fn calculate_graph(request: GraphRequest) -> Result<Vec<Vec<Point>>, String> {
     let formula = request
         .formula
         .trim()
@@ -63,26 +112,53 @@ pub fn calculate_graph(request: GraphRequest) -> Result<Vec<Point>, String> {
             format!("Invalid expression (use 'x' as variable): {}", e)
         })?;
 
-    if request.step <= 0.0 {
+    if !(request.step.is_finite() && request.step > 0.0) {
         return Err("Step must be positive".to_string());
+    }
+
+    if !(request.x_min.is_finite() && request.x_max.is_finite()) {
+        return Err("x range must be finite".to_string());
     }
 
     if request.x_min >= request.x_max {
         return Err("x_min must be less than x_max".to_string());
     }
 
-    let mut points = Vec::new();
-    let mut x = request.x_min;
-
-    while x <= request.x_max {
-        let y = func(x);
-        if y.is_finite() {
-            points.push(Point { x, y });
-        }
-        x += request.step;
+    let samples = (request.x_max - request.x_min) / request.step;
+    if samples > MAX_GRAPH_SAMPLES as f64 {
+        return Err(format!(
+            "Too many points: (x_max - x_min) / step = {:.0} exceeds {} (increase step or narrow the range)",
+            samples, MAX_GRAPH_SAMPLES
+        ));
     }
 
-    Ok(points)
+    let mut pieces: Vec<Vec<Point>> = Vec::new();
+    let mut current: Vec<Point> = Vec::new();
+    // current 의 마지막 점 이후 건너뛴(정의되지 않은) 샘플 수
+    let mut skipped = 0usize;
+
+    for x in sample_positions(request.x_min, request.x_max, request.step) {
+        let y = func(x);
+        if !y.is_finite() {
+            skipped += 1;
+            continue;
+        }
+        let p = Point { x, y };
+        if let Some(prev) = current.last() {
+            // 샘플 하나만 빠진 경우(sin(x)/x 의 x=0 같은 제거 가능한 점)는 양옆이 이어지면 그대로 연결
+            let connected = skipped <= 1 && !is_discontinuous(&func, prev.clone(), p.clone());
+            if !connected {
+                pieces.push(std::mem::take(&mut current));
+            }
+        }
+        current.push(p);
+        skipped = 0;
+    }
+    if !current.is_empty() {
+        pieces.push(current);
+    }
+
+    Ok(pieces)
 }
 
 /// Marching squares lookup: case_index -> list of (edge_a, edge_b) pairs for segments.
@@ -180,11 +256,18 @@ pub fn calculate_implicit(request: ImplicitRequest) -> Result<Vec<Vec<Point>>, S
             format!("Invalid expression (use 'x' and 'y' as variables): {}", e)
         })?;
 
+    let bounds = [request.x_min, request.x_max, request.y_min, request.y_max];
+    if !bounds.iter().all(|v| v.is_finite()) {
+        return Err("x, y range must be finite".to_string());
+    }
     if request.x_min >= request.x_max || request.y_min >= request.y_max {
         return Err("x_min < x_max and y_min < y_max required".to_string());
     }
     if request.grid_size < 2 {
         return Err("grid_size must be at least 2".to_string());
+    }
+    if request.grid_size > MAX_GRID_SIZE {
+        return Err(format!("grid_size must be at most {}", MAX_GRID_SIZE));
     }
 
     let n = request.grid_size as usize;
@@ -359,9 +442,100 @@ mod tests {
         }
     }
 
+    /// 모든 구간의 점을 이어 붙인 목록
+    fn points(request: GraphRequest) -> Vec<Point> {
+        calculate_graph(request).unwrap().into_iter().flatten().collect()
+    }
+
+    /// 구간별 (첫 x, 마지막 x)
+    fn piece_ranges(formula: &str, x_min: f64, x_max: f64, step: f64) -> Vec<(f64, f64)> {
+        calculate_graph(req(formula, x_min, x_max, step))
+            .unwrap()
+            .iter()
+            .map(|piece| (piece[0].x, piece[piece.len() - 1].x))
+            .collect()
+    }
+
+    #[test]
+    fn test_samples_without_accumulated_error() {
+        // 0.1 을 10번 더하면 0.9999999999999999 → 이제 i*step 으로 계산하고 끝은 x_max
+        let xs: Vec<f64> = points(req("x", 0.0, 1.0, 0.1)).iter().map(|p| p.x).collect();
+        assert_eq!(xs.len(), 11);
+        assert_eq!(xs[10], 1.0);
+        assert!((xs[3] - 0.3).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_last_sample_is_x_max_when_not_divisible() {
+        let xs: Vec<f64> = points(req("x", 0.0, 1.0, 0.3)).iter().map(|p| p.x).collect();
+        assert_eq!(xs.len(), 5);
+        assert!((xs[3] - 0.9).abs() < 1e-15);
+        assert_eq!(xs[4], 1.0);
+    }
+
+    #[test]
+    fn test_too_many_samples_rejected() {
+        let r = calculate_graph(req("x", -1e9, 1e9, 0.01));
+        assert!(r.unwrap_err().contains("Too many points"));
+        // 상한 바로 아래는 허용
+        let n = MAX_GRAPH_SAMPLES as f64;
+        assert!(calculate_graph(req("x", 0.0, n, 1.0)).is_ok());
+    }
+
+    #[test]
+    fn test_non_finite_inputs_rejected() {
+        assert!(calculate_graph(req("x", f64::NEG_INFINITY, 0.0, 0.1)).is_err());
+        assert!(calculate_graph(req("x", 0.0, 1.0, f64::NAN)).is_err());
+        assert!(calculate_graph(req("x", 0.0, 1.0, f64::INFINITY)).is_err());
+    }
+
+    #[test]
+    fn test_pole_splits_curve() {
+        // 1/x: x=0 양쪽을 잇지 않음 (x=0 을 샘플하든 안 하든)
+        for (x_min, step) in [(-1.0, 0.004), (-1.0, 0.003), (-1.0, 0.5)] {
+            let pieces = piece_ranges("1/x", x_min, 1.0, step);
+            assert_eq!(pieces.len(), 2, "step {}: {:?}", step, pieces);
+            assert!(pieces[0].1 < 0.0 && pieces[1].0 > 0.0, "step {}: {:?}", step, pieces);
+        }
+        // 대칭 점근선 1/x² 도 분리 (양쪽 샘플 값이 같아도)
+        assert_eq!(piece_ranges("1/x^2", -1.0, 1.0, 0.004).len(), 2);
+        // tan(x): [-5, 5] 에 ±π/2, ±3π/2 네 개의 점근선 → 5 구간
+        assert_eq!(piece_ranges("tan(x)", -5.0, 5.0, 0.02).len(), 5);
+    }
+
+    #[test]
+    fn test_step_function_splits_at_jumps() {
+        // floor(x): -2, -1, 0, 1, 2 에서 점프 → 6 구간
+        assert_eq!(piece_ranges("floor(x)", -2.5, 2.5, 0.04).len(), 6);
+    }
+
+    #[test]
+    fn test_undefined_region_splits_curve() {
+        // sqrt(x^2-1): (-1, 1) 에서 정의되지 않음 → 양쪽 2 구간, 가운데를 잇지 않음
+        let pieces = piece_ranges("sqrt(x^2-1)", -3.0, 3.0, 0.01);
+        assert_eq!(pieces.len(), 2, "{:?}", pieces);
+        assert!(pieces[0].1 <= -1.0 && pieces[1].0 >= 1.0, "{:?}", pieces);
+    }
+
+    #[test]
+    fn test_continuous_functions_stay_in_one_piece() {
+        for f in ["sin(x)", "x^3", "exp(x)", "tanh(50*x)", "sin(x)^2+cos(x)^2", "cos(x)", "abs(x)"] {
+            assert_eq!(piece_ranges(f, -5.0, 5.0, 0.02).len(), 1, "{} split unexpectedly", f);
+        }
+        // 대칭 샘플 (x = ±0.04) 사이에 극값이 있어도 이어짐
+        assert_eq!(piece_ranges("cos(x)", -1.0, 1.0, 0.04).len(), 1);
+    }
+
+    #[test]
+    fn test_removable_singularity_stays_connected() {
+        // sin(x)/x: x=0 샘플만 NaN → 양옆이 이어지므로 한 구간
+        let pieces = piece_ranges("sin(x)/x", -5.0, 5.0, 0.04);
+        assert_eq!(pieces.len(), 1, "{:?}", pieces);
+    }
+
     #[test]
     fn test_linear() {
-        let pts = calculate_graph(req("x", 0.0, 2.0, 1.0)).unwrap();
+        let pts = points(req("x", 0.0, 2.0, 1.0));
         assert_eq!(pts.len(), 3);
         assert!((pts[0].y - 0.0).abs() < 1e-10);
         assert!((pts[1].y - 1.0).abs() < 1e-10);
@@ -370,7 +544,7 @@ mod tests {
 
     #[test]
     fn test_quadratic() {
-        let pts = calculate_graph(req("x^2", -1.0, 1.0, 1.0)).unwrap();
+        let pts = points(req("x^2", -1.0, 1.0, 1.0));
         assert_eq!(pts.len(), 3);
         assert!((pts[0].y - 1.0).abs() < 1e-10);
         assert!((pts[1].y - 0.0).abs() < 1e-10);
@@ -379,21 +553,21 @@ mod tests {
 
     #[test]
     fn test_sin() {
-        let pts = calculate_graph(req("sin(x)", 0.0, 0.01, 0.01)).unwrap();
+        let pts = points(req("sin(x)", 0.0, 0.01, 0.01));
         assert!(!pts.is_empty());
         assert!((pts[0].y - 0.0).abs() < 1e-10);
     }
 
     #[test]
     fn test_log10() {
-        let pts = calculate_graph(req("log(x)", 10.0, 10.01, 0.01)).unwrap();
+        let pts = points(req("log(x)", 10.0, 10.01, 0.01));
         assert!(!pts.is_empty());
         assert!((pts[0].y - 1.0).abs() < 1e-10);
     }
 
     #[test]
     fn test_y_prefix_stripped() {
-        let pts = calculate_graph(req("y = x", 1.0, 1.01, 0.01)).unwrap();
+        let pts = points(req("y = x", 1.0, 1.01, 0.01));
         assert!(!pts.is_empty());
         assert!((pts[0].y - 1.0).abs() < 1e-10);
     }
@@ -429,7 +603,7 @@ mod tests {
     #[test]
     fn test_inf_nan_filtered() {
         // 1/x at x=0 gives inf, should be filtered
-        let pts = calculate_graph(req("1/x", -1.0, 1.0, 0.5)).unwrap();
+        let pts = points(req("1/x", -1.0, 1.0, 0.5));
         // x=-1, -0.5, 0, 0.5, 1 -> 0 gives inf, filtered
         assert!(pts.len() < 5);
         assert!(pts.iter().all(|p| p.y.is_finite()));
@@ -438,7 +612,7 @@ mod tests {
     #[test]
     fn test_tan() {
         // tan(0) = 0
-        let pts = calculate_graph(req("tan(x)", 0.0, 0.01, 0.01)).unwrap();
+        let pts = points(req("tan(x)", 0.0, 0.01, 0.01));
         assert!(!pts.is_empty());
         assert!((pts[0].y - 0.0).abs() < 1e-10);
     }
@@ -446,7 +620,7 @@ mod tests {
     #[test]
     fn test_asin() {
         // asin(0) = 0
-        let pts = calculate_graph(req("asin(x)", 0.0, 0.01, 0.01)).unwrap();
+        let pts = points(req("asin(x)", 0.0, 0.01, 0.01));
         assert!(!pts.is_empty());
         assert!((pts[0].y - 0.0).abs() < 1e-10);
     }
@@ -454,7 +628,7 @@ mod tests {
     #[test]
     fn test_acos() {
         // acos(0) = pi/2
-        let pts = calculate_graph(req("acos(x)", 0.0, 0.01, 0.01)).unwrap();
+        let pts = points(req("acos(x)", 0.0, 0.01, 0.01));
         assert!(!pts.is_empty());
         let expected = std::f64::consts::FRAC_PI_2;
         assert!((pts[0].y - expected).abs() < 1e-10);
@@ -463,7 +637,7 @@ mod tests {
     #[test]
     fn test_atan() {
         // atan(0) = 0
-        let pts = calculate_graph(req("atan(x)", 0.0, 0.01, 0.01)).unwrap();
+        let pts = points(req("atan(x)", 0.0, 0.01, 0.01));
         assert!(!pts.is_empty());
         assert!((pts[0].y - 0.0).abs() < 1e-10);
     }
@@ -471,15 +645,15 @@ mod tests {
     #[test]
     fn test_sinh_cosh_tanh() {
         // sinh(0)=0, cosh(0)=1, tanh(0)=0
-        let pts = calculate_graph(req("sinh(x)", 0.0, 0.01, 0.01)).unwrap();
+        let pts = points(req("sinh(x)", 0.0, 0.01, 0.01));
         assert!(!pts.is_empty());
         assert!((pts[0].y - 0.0).abs() < 1e-10);
 
-        let pts = calculate_graph(req("cosh(x)", 0.0, 0.01, 0.01)).unwrap();
+        let pts = points(req("cosh(x)", 0.0, 0.01, 0.01));
         assert!(!pts.is_empty());
         assert!((pts[0].y - 1.0).abs() < 1e-10);
 
-        let pts = calculate_graph(req("tanh(x)", 0.0, 0.01, 0.01)).unwrap();
+        let pts = points(req("tanh(x)", 0.0, 0.01, 0.01));
         assert!(!pts.is_empty());
         assert!((pts[0].y - 0.0).abs() < 1e-10);
     }
@@ -593,6 +767,14 @@ mod implicit_tests {
                 .sum();
             assert!(length > 1.0, "zero-length curve: {:?}", curve);
         }
+    }
+
+    #[test]
+    fn test_implicit_grid_and_bounds_limits() {
+        assert!(calculate_implicit(imp_req("x+y", -1.0, 1.0, -1.0, 1.0, MAX_GRID_SIZE)).is_ok());
+        let r = calculate_implicit(imp_req("x+y", -1.0, 1.0, -1.0, 1.0, MAX_GRID_SIZE + 1));
+        assert!(r.unwrap_err().contains("at most"));
+        assert!(calculate_implicit(imp_req("x+y", f64::NAN, 1.0, -1.0, 1.0, 20)).is_err());
     }
 
     #[test]

@@ -28,6 +28,46 @@ function parseLatex(latex: string): { formula: string; type: FormulaType } {
     return { formula: formula?.trim() ?? '', type };
 }
 
+interface NumberInputProps {
+    id: string;
+    value: number;
+    onCommit: (value: number) => void;
+    isValid?: (value: number) => boolean;
+    step: string;
+    min?: string;
+}
+
+/**
+ * 스토어 값과 연결된 숫자 입력.
+ * 빈 칸, "-" 같은 입력 도중 상태나 유효하지 않은 값은 스토어에 반영하지 않고,
+ * 포커스를 잃으면 마지막으로 반영된 값으로 되돌린다. (기존: 칸을 비우면 즉시 0 반영)
+ */
+function NumberInput({ id, value, onCommit, isValid = Number.isFinite, step, min }: NumberInputProps) {
+    const [draft, setDraft] = useState(String(value));
+
+    // 바깥에서 값이 바뀌면 동기화. "1." 처럼 같은 값을 뜻하는 입력 중 초안은 유지
+    useEffect(() => {
+        setDraft((d) => (d.trim() !== '' && Number(d) === value ? d : String(value)));
+    }, [value]);
+
+    return (
+        <input
+            id={id}
+            type='number'
+            value={draft}
+            onChange={(e) => {
+                const text = e.target.value;
+                setDraft(text);
+                const next = Number(text);
+                if (text.trim() !== '' && isValid(next)) onCommit(next);
+            }}
+            onBlur={() => setDraft(String(value))}
+            step={step}
+            min={min}
+        />
+    );
+}
+
 export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
     const mfRef = useRef<MathfieldElement | null>(null);
     const [showRange, setShowRange] = useState(false);
@@ -185,53 +225,39 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                     {showRange && (
                         <div className={styles.row}>
                             <label htmlFor='xMin'>x 최소</label>
-                            <input
+                            <NumberInput
                                 id='xMin'
-                                type='number'
                                 value={xMin}
-                                onChange={(e) =>
-                                    setRange2D(Number(e.target.value), xMax, yMin, yMax, step)
-                                }
+                                onCommit={(v) => setRange2D(v, xMax, yMin, yMax, step)}
                                 step='0.5'
                             />
                             <label htmlFor='xMax'>x 최대</label>
-                            <input
+                            <NumberInput
                                 id='xMax'
-                                type='number'
                                 value={xMax}
-                                onChange={(e) =>
-                                    setRange2D(xMin, Number(e.target.value), yMin, yMax, step)
-                                }
+                                onCommit={(v) => setRange2D(xMin, v, yMin, yMax, step)}
                                 step='0.5'
                             />
                             <label htmlFor='yMin'>y 최소</label>
-                            <input
+                            <NumberInput
                                 id='yMin'
-                                type='number'
                                 value={yMin}
-                                onChange={(e) =>
-                                    setRange2D(xMin, xMax, Number(e.target.value), yMax, step)
-                                }
+                                onCommit={(v) => setRange2D(xMin, xMax, v, yMax, step)}
                                 step='0.5'
                             />
                             <label htmlFor='yMax'>y 최대</label>
-                            <input
+                            <NumberInput
                                 id='yMax'
-                                type='number'
                                 value={yMax}
-                                onChange={(e) =>
-                                    setRange2D(xMin, xMax, yMin, Number(e.target.value), step)
-                                }
+                                onCommit={(v) => setRange2D(xMin, xMax, yMin, v, step)}
                                 step='0.5'
                             />
                             <label htmlFor='step'>간격</label>
-                            <input
+                            <NumberInput
                                 id='step'
-                                type='number'
                                 value={step}
-                                onChange={(e) =>
-                                    setRange2D(xMin, xMax, yMin, yMax, Number(e.target.value))
-                                }
+                                onCommit={(v) => setRange2D(xMin, xMax, yMin, yMax, v)}
+                                isValid={(v) => Number.isFinite(v) && v > 0}
                                 step='0.01'
                                 min='0.01'
                             />

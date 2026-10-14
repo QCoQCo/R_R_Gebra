@@ -1,18 +1,12 @@
 import { useRef, useEffect, useState } from 'react';
-import { Mafs, Coordinates, Plot, Theme } from 'mafs';
+import { Mafs, Plot, Theme } from 'mafs';
 import { useGraphStore } from '../store/graphStore';
 import type { Point } from '../store/graphStore';
 import { DEFAULT_VIEW } from '../constants';
+import { AdaptiveCoordinates } from './AdaptiveCoordinates';
 import { ViewportObserver } from './ViewportObserver';
 import styles from './GraphCanvas.module.scss';
 
-/** 뷰포트 x 범위(span)에 따라 축 눈금 간격 반환. 겹침 방지 */
-function axisLineInterval(span: number): number {
-    if (span <= 10) return 0.5;
-    if (span <= 40) return 1;
-    if (span <= 150) return 5;
-    return 10;
-}
 
 function interpolatePoints(points: Point[], t: number): [number, number] {
     if (points.length === 0) return [0, 0];
@@ -32,8 +26,7 @@ export function GraphCanvas() {
     const [size, setSize] = useState({ width: 800, height: 800 });
     const [pending, setPending] = useState(false);
     const {
-        points,
-        implicitCurves,
+        curves,
         formulaType,
         xMin,
         xMax,
@@ -65,22 +58,14 @@ export function GraphCanvas() {
         compute();
     }, [formula, formulaType, viewportMode, viewportBounds, recomputeToken, compute]);
 
-    const viewBox =
-        viewportMode === 'manual'
-            ? {
-                  x: [xMin, xMax] as [number, number],
-                  y: [yMin, yMax] as [number, number],
-              }
-            : { x: DEFAULT_VIEW, y: DEFAULT_VIEW };
-
-    const xSpan =
-        viewportMode === 'manual'
-            ? xMax - xMin
-            : viewportBounds
-              ? viewportBounds.xMax - viewportBounds.xMin
-              : 20;
-    const span = xSpan;
-    const lineInterval = axisLineInterval(span);
+    // 수동 범위 입력 도중 최소 ≥ 최대가 되는 순간에는 뒤집힌 범위를 Mafs 에 넘기지 않음
+    const useManualView = viewportMode === 'manual' && xMin < xMax && yMin < yMax;
+    const viewBox = useManualView
+        ? {
+              x: [xMin, xMax] as [number, number],
+              y: [yMin, yMax] as [number, number],
+          }
+        : { x: DEFAULT_VIEW, y: DEFAULT_VIEW };
 
     return (
         <div ref={containerRef} className={styles.canvas}>
@@ -111,29 +96,17 @@ export function GraphCanvas() {
                         debounceMs={250}
                     />
                 )}
-                <Coordinates.Cartesian
-                    subdivisions={4}
-                    xAxis={{ lines: lineInterval }}
-                    yAxis={{ lines: lineInterval }}
-                />
-                {formulaType === 'explicit' && points.length >= 2 && (
-                    <Plot.Parametric
-                        domain={[0, 1]}
-                        xy={(t) => interpolatePoints(points, t)}
-                        color={Theme.blue}
-                    />
+                <AdaptiveCoordinates />
+                {curves.map((curve, i) =>
+                    curve.length >= 2 ? (
+                        <Plot.Parametric
+                            key={i}
+                            domain={[0, 1]}
+                            xy={(t) => interpolatePoints(curve, t)}
+                            color={Theme.blue}
+                        />
+                    ) : null
                 )}
-                {formulaType === 'implicit' &&
-                    implicitCurves.map((curve, i) =>
-                        curve.length >= 2 ? (
-                            <Plot.Parametric
-                                key={i}
-                                domain={[0, 1]}
-                                xy={(t) => interpolatePoints(curve, t)}
-                                color={Theme.blue}
-                            />
-                        ) : null
-                    )}
             </Mafs>
         </div>
     );

@@ -25,9 +25,12 @@ function deferred<T>() {
 }
 
 const store = () => useGraphStore.getState();
-const pts = (y: number): Point[] => [
-  { x: 0, y },
-  { x: 1, y },
+/** 구간 하나짜리 곡선 목록 */
+const pts = (y: number): Point[][] => [
+  [
+    { x: 0, y },
+    { x: 1, y },
+  ],
 ];
 
 beforeEach(() => {
@@ -84,8 +87,8 @@ describe('compute: 계산 범위', () => {
 
 describe('compute: 결과 반영', () => {
   it('늦게 도착한 이전 요청의 결과는 버린다', async () => {
-    const first = deferred<Point[]>();
-    const second = deferred<Point[]>();
+    const first = deferred<Point[][]>();
+    const second = deferred<Point[][]>();
     graphMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
 
     store().setExpression('x', 'explicit');
@@ -98,12 +101,12 @@ describe('compute: 결과 반영', () => {
     first.resolve(pts(1));
     await run1;
 
-    expect(store().points).toEqual(pts(2));
+    expect(store().curves).toEqual(pts(2));
     expect(store().loading).toBe(false);
   });
 
   it('이전 요청의 오류도 최신 결과를 덮어쓰지 않는다', async () => {
-    const first = deferred<Point[]>();
+    const first = deferred<Point[][]>();
     graphMock.mockReturnValueOnce(first.promise).mockResolvedValueOnce(pts(2));
 
     store().setExpression('x+', 'explicit');
@@ -114,7 +117,7 @@ describe('compute: 결과 반영', () => {
     await run1;
 
     expect(store().error).toBeNull();
-    expect(store().points).toEqual(pts(2));
+    expect(store().curves).toEqual(pts(2));
   });
 
   it('최신 요청의 오류는 표시하고 로딩을 끝낸다', async () => {
@@ -135,7 +138,7 @@ describe('compute: 결과 반영', () => {
     await store().compute();
 
     expect(graphMock).toHaveBeenCalledTimes(1);
-    expect(store().points).toEqual(pts(1));
+    expect(store().curves).toEqual(pts(1));
   });
 
   it('수식을 지우면 그래프를 비운다', async () => {
@@ -146,8 +149,7 @@ describe('compute: 결과 반영', () => {
     store().setExpression('', 'explicit');
     await store().compute();
 
-    expect(store().points).toEqual([]);
-    expect(store().implicitCurves).toEqual([]);
+    expect(store().curves).toEqual([]);
     expect(graphMock).toHaveBeenCalledTimes(1);
   });
 });
