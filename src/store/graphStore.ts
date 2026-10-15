@@ -1,12 +1,7 @@
 import { create } from 'zustand';
 import { calculateGraph, calculateImplicit } from '../api';
 import type { Point } from '../api';
-import {
-  DEFAULT_BOUNDS,
-  MAX_CACHE_ENTRIES,
-  POINTS_PER_VIEW,
-  computeImplicitGridSize,
-} from '../constants';
+import { DEFAULT_BOUNDS, MAX_CACHE_ENTRIES, computeWindow } from '../constants';
 
 export type { Point };
 
@@ -47,7 +42,7 @@ function makeImplicitCacheKey(
   return `implicit|${formula}|${xMin}|${xMax}|${yMin}|${yMax}|${gridSize}`;
 }
 
-/** 새 엔트리를 추가한 캐시 사본. MAX_CACHE_ENTRIES 초과 시 가장 오래된 엔트리 제거 */
+/** 새 엔트리를 추가한 캐시 사본. MAX_CACHE_ENTRIES 초과 시 가장 오래 쓰지 않은 엔트리 제거 */
 function withCacheEntry<K, V>(cache: Map<K, V>, key: K, value: V): Map<K, V> {
   const next = new Map(cache).set(key, value);
   if (next.size > MAX_CACHE_ENTRIES) {
@@ -137,15 +132,13 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       return;
     }
 
-    const bounds: ViewportBounds =
+    // manual: 입력한 범위·간격 그대로 / auto: 화면 범위 + 미리 계산할 여유
+    const { bounds, step: explicitStep, gridSize } =
       s.viewportMode === 'manual'
-        ? { xMin: s.xMin, xMax: s.xMax, yMin: s.yMin, yMax: s.yMax }
-        : (s.viewportBounds ?? DEFAULT_BOUNDS);
+        ? computeWindow({ xMin: s.xMin, xMax: s.xMax, yMin: s.yMin, yMax: s.yMax }, false, s.step)
+        : computeWindow(s.viewportBounds ?? DEFAULT_BOUNDS, true);
     const { xMin, xMax, yMin, yMax } = bounds;
 
-    const explicitStep =
-      s.viewportMode === 'manual' ? s.step : (xMax - xMin) / POINTS_PER_VIEW;
-    const gridSize = computeImplicitGridSize(bounds);
     const key =
       s.formulaType === 'explicit'
         ? makeCacheKey(formula, xMin, xMax, explicitStep)
@@ -153,7 +146,11 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
     try {
       let curves = s.curveCache.get(key);
-      if (!curves) {
+      if (curves) {
+        // LRU: 꺼낸 항목을 가장 최근으로. 캐시는 구독하는 컴포넌트가 없어 제자리에서 순서만 갱신
+        s.curveCache.delete(key);
+        s.curveCache.set(key, curves);
+      } else {
         set({ loading: true, error: null });
         curves =
           s.formulaType === 'explicit'

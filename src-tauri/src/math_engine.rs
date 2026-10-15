@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// log(x) = log10(x) = ln(x) / ln(10)
 fn log10_fn(x: f64) -> f64 {
@@ -240,6 +241,155 @@ fn lerp_zero(v0: f64, v1: f64) -> Option<f64> {
     }
 }
 
+/// 격자 안쪽 선을 셀 크기의 이 비율만큼 민다 (x, y 다르게). 양 끝 선은 범위 경계 그대로.
+/// 대칭 범위에서 꼭짓점이 x = ±y, x = 0 같은 대칭선 위에 정확히 놓이면 f = 0 인 꼭짓점이 생겨
+/// 길이 0 선분·교차점의 틈 같은 퇴화가 생긴다. 비율이 서로 다르면 x_i = ±y_j 도 생기지 않음.
+const GRID_OFFSET_X: f64 = 0.0137;
+const GRID_OFFSET_Y: f64 = 0.0291;
+
+/// 세분화할 때 셀 한 변의 하위 칸 수. 짝수라 셀 중심을 지나는 하위 격자선이 생겨
+/// 중심 판정으로 찾은 가는 띠를 하위 격자에서도 반드시 잡는다.
+const REFINE_SUBDIVISIONS: usize = 4;
+
+/// 세분화할 셀 수 상한 (×(k+1)² 번 평가). 넘으면 세분화 없이 기본 격자 결과를 쓴다.
+const MAX_REFINED_CELLS: usize = 50_000;
+
+/// [min, max] 를 n 개 격자선으로 나눈 위치. 안쪽 선만 offset 비율만큼 밀림.
+fn grid_lines(min: f64, max: f64, n: usize, offset: f64) -> Vec<f64> {
+    let d = (max - min) / (n - 1) as f64;
+    (0..n)
+        .map(|i| match i {
+            0 => min,
+            _ if i == n - 1 => max,
+            _ => min + (i as f64 + offset) * d,
+        })
+        .collect()
+}
+
+/// 꼭짓점 부호가 같은 셀 안에서 f 가 0 에 닿을 여지가 있는지 (중심 평가 전 싼 사전 판정).
+/// 꼭짓점 |f| 최솟값이 꼭짓점과 이웃 격자점 사이 변화량보다 작으면 한 칸 안에서 0 까지 갈 수 있다고 본다.
+fn may_cross_inside(grid: &[Vec<Option<f64>>], ix: usize, iy: usize, v: &[f64; 4]) -> bool {
+    let min_abs = v.iter().fold(f64::INFINITY, |m, c| m.min(c.abs()));
+    let mut variation: f64 = 0.0;
+    for (cx, cy) in [(ix, iy), (ix + 1, iy), (ix + 1, iy + 1), (ix, iy + 1)] {
+        let Some(c) = grid[cx][cy] else { continue };
+        for (nx, ny) in [(cx.wrapping_sub(1), cy), (cx + 1, cy), (cx, cy.wrapping_sub(1)), (cx, cy + 1)] {
+            if let Some(Some(nv)) = grid.get(nx).and_then(|col| col.get(ny)) {
+                variation = variation.max((c - nv).abs());
+            }
+        }
+    }
+    min_abs < variation
+}
+
+/// 한 셀(또는 하위 셀)에 marching squares 를 적용해 선분을 out 에 추가한다.
+/// v = [bl, br, tr, tl] 꼭짓점 값.
+fn march_cell(
+    f: &dyn Fn(f64, f64) -> f64,
+    x0: f64,
+    x1: f64,
+    y0: f64,
+    y1: f64,
+    v: [f64; 4],
+    out: &mut Vec<(Point, Point)>,
+) {
+    let [v00, v10, v11, v01] = v;
+    let sign = |v: f64| v >= 0.0;
+    let idx = (sign(v00) as u8) | ((sign(v10) as u8) << 1) | ((sign(v11) as u8) << 2) | ((sign(v01) as u8) << 3);
+
+    let edge_points = |e: u8| -> Option<Point> {
+        match e {
+            0 => {
+                let t = lerp_zero(v01, v11)?;
+                Some(Point { x: x0 + t * (x1 - x0), y: y1 })
+            }
+            1 => {
+                let t = lerp_zero(v10, v11)?;
+                Some(Point { x: x1, y: y0 + t * (y1 - y0) })
+            }
+            2 => {
+                let t = lerp_zero(v00, v10)?;
+                Some(Point { x: x0 + t * (x1 - x0), y: y0 })
+            }
+            3 => {
+                let t = lerp_zero(v00, v01)?;
+                Some(Point { x: x0, y: y0 + t * (y1 - y0) })
+            }
+            _ => None,
+        }
+    };
+
+    let edges = if idx == 5 || idx == 10 {
+        // 중심을 직접 평가하고, 정의되지 않으면 네 꼭짓점 평균으로 대체
+        let center = eval_cell(f, (x0 + x1) / 2.0, (y0 + y1) / 2.0)
+            .unwrap_or((v00 + v10 + v11 + v01) / 4.0);
+        saddle_edges(idx, center >= 0.0)
+    } else {
+        MS_EDGES[idx as usize]
+    };
+    for seg in edges {
+        if let (Some(p1), Some(p2)) = (edge_points(seg.0), edge_points(seg.1)) {
+            // 꼭짓점이 정확히 곡선 위(f=0)면 두 끝점이 같은 길이 0 선분이 생김
+            if !point_eq(&p1, &p2, SEGMENT_EPS) {
+                out.push((p1, p2));
+            }
+        }
+    }
+}
+
+/// 셀 하나를 k×k 하위 격자로 다시 평가한 값. values[a * (k + 1) + b] = f(xs[a], ys[b])
+struct SubGrid {
+    xs: Vec<f64>,
+    ys: Vec<f64>,
+    values: Vec<Option<f64>>,
+}
+
+impl SubGrid {
+    fn new(f: &dyn Fn(f64, f64) -> f64, x0: f64, x1: f64, y0: f64, y1: f64) -> SubGrid {
+        let k = REFINE_SUBDIVISIONS;
+        // 양 끝은 셀 경계 값 그대로 써서, 이웃 셀의 하위 격자와 공유 변 위 점이 정확히 같게
+        let line = |lo: f64, hi: f64| -> Vec<f64> {
+            (0..=k).map(|i| if i == k { hi } else { lo + (hi - lo) * i as f64 / k as f64 }).collect()
+        };
+        let xs = line(x0, x1);
+        let ys = line(y0, y1);
+        let values = xs.iter().flat_map(|&x| ys.iter().map(move |&y| eval_cell(f, x, y))).collect();
+        SubGrid { xs, ys, values }
+    }
+
+    fn at(&self, a: usize, b: usize) -> Option<f64> {
+        self.values[a * (REFINE_SUBDIVISIONS + 1) + b]
+    }
+
+    /// 경계 변(0=top, 1=right, 2=bottom, 3=left) 위 하위 꼭짓점 사이에서 부호가 바뀌는지
+    fn edge_has_crossing(&self, edge: u8) -> bool {
+        let k = REFINE_SUBDIVISIONS;
+        let along: Vec<Option<f64>> = (0..=k)
+            .map(|i| match edge {
+                0 => self.at(i, k),
+                1 => self.at(k, i),
+                2 => self.at(i, 0),
+                _ => self.at(0, i),
+            })
+            .collect();
+        along
+            .windows(2)
+            .any(|w| matches!((w[0], w[1]), (Some(p), Some(q)) if (p >= 0.0) != (q >= 0.0)))
+    }
+
+    fn march(&self, f: &dyn Fn(f64, f64) -> f64, out: &mut Vec<(Point, Point)>) {
+        let k = REFINE_SUBDIVISIONS;
+        for a in 0..k {
+            for b in 0..k {
+                let corners = (self.at(a, b), self.at(a + 1, b), self.at(a + 1, b + 1), self.at(a, b + 1));
+                if let (Some(v00), Some(v10), Some(v11), Some(v01)) = corners {
+                    march_cell(f, self.xs[a], self.xs[a + 1], self.ys[b], self.ys[b + 1], [v00, v10, v11, v01], out);
+                }
+            }
+        }
+    }
+}
+
 /// Compute contour segments for f(x,y)=0 using marching squares.
 /// Returns Vec of contours, each contour is Vec<Point>.
 pub fn calculate_implicit(request: ImplicitRequest) -> Result<Vec<Vec<Point>>, String> {
@@ -271,102 +421,78 @@ pub fn calculate_implicit(request: ImplicitRequest) -> Result<Vec<Vec<Point>>, S
     }
 
     let n = request.grid_size as usize;
-    let dx = (request.x_max - request.x_min) / (n - 1) as f64;
-    let dy = (request.y_max - request.y_min) / (n - 1) as f64;
+    let cells = n - 1;
+    let dx = (request.x_max - request.x_min) / cells as f64;
+    let dy = (request.y_max - request.y_min) / cells as f64;
+    let xs = grid_lines(request.x_min, request.x_max, n, GRID_OFFSET_X);
+    let ys = grid_lines(request.y_min, request.y_max, n, GRID_OFFSET_Y);
 
-    // Build value grid: grid[ix][iy] = f(x_ix, y_iy)
-    let mut grid: Vec<Vec<Option<f64>>> = vec![vec![None; n]; n];
-    for ix in 0..n {
-        for iy in 0..n {
-            let x = request.x_min + ix as f64 * dx;
-            let y = request.y_min + iy as f64 * dy;
-            grid[ix][iy] = eval_cell(&func, x, y);
+    // Build value grid: grid[ix][iy] = f(xs[ix], ys[iy])
+    let grid: Vec<Vec<Option<f64>>> = xs
+        .iter()
+        .map(|&x| ys.iter().map(|&y| eval_cell(&func, x, y)).collect())
+        .collect();
+    let corners = |ix: usize, iy: usize| -> Option<[f64; 4]> {
+        Some([grid[ix][iy]?, grid[ix + 1][iy]?, grid[ix + 1][iy + 1]?, grid[ix][iy + 1]?])
+    };
+
+    // 1) 세분화 시작점: 꼭짓점 부호는 모두 같은데 셀 중심에서 부호가 바뀌는 셀
+    //    (격자 한 칸보다 가는 띠 — |xy| = 0.1 의 축 근처 등. 기본 격자로는 통째로 놓침)
+    let mut queue: Vec<(usize, usize)> = Vec::new();
+    for ix in 0..cells {
+        for iy in 0..cells {
+            let Some(v) = corners(ix, iy) else { continue };
+            let above = v[0] >= 0.0;
+            if v.iter().any(|&c| (c >= 0.0) != above) || !may_cross_inside(&grid, ix, iy, &v) {
+                continue;
+            }
+            let center = eval_cell(&func, (xs[ix] + xs[ix + 1]) / 2.0, (ys[iy] + ys[iy + 1]) / 2.0);
+            if matches!(center, Some(c) if (c >= 0.0) != above) {
+                queue.push((ix, iy));
+            }
         }
     }
 
-    // Collect segments: (Point, Point)
+    // 2) 세분화한 셀의 경계 변에서 부호가 바뀌면 그 너머 이웃도 세분화.
+    //    공유 변 위의 교차점을 양쪽 셀이 같은 하위 격자로 계산해야 곡선이 이어진다.
+    let mut seen: HashSet<(usize, usize)> = queue.iter().copied().collect();
+    let mut refined: HashMap<(usize, usize), SubGrid> = HashMap::new();
+    while let Some((ix, iy)) = queue.pop() {
+        if seen.len() > MAX_REFINED_CELLS {
+            refined.clear(); // 계산량 폭주 → 세분화 없이 기본 격자 결과 사용
+            break;
+        }
+        let sub = SubGrid::new(&func, xs[ix], xs[ix + 1], ys[iy], ys[iy + 1]);
+        let neighbors = [
+            (0, iy + 1 < cells, (ix, iy + 1)),        // top
+            (1, ix + 1 < cells, (ix + 1, iy)),        // right
+            (2, iy > 0, (ix, iy.wrapping_sub(1))),    // bottom
+            (3, ix > 0, (ix.wrapping_sub(1), iy)),    // left
+        ];
+        for (edge, exists, neighbor) in neighbors {
+            if exists && sub.edge_has_crossing(edge) && seen.insert(neighbor) {
+                queue.push(neighbor);
+            }
+        }
+        refined.insert((ix, iy), sub);
+    }
+
+    // 3) Marching squares: 세분화한 셀은 하위 격자로, 나머지는 기본 격자로
     let mut segments: Vec<(Point, Point)> = Vec::new();
-
-    for ix in 0..n.saturating_sub(1) {
-        for iy in 0..n.saturating_sub(1) {
-            let v00 = grid[ix][iy];
-            let v10 = grid[ix + 1][iy];
-            let v11 = grid[ix + 1][iy + 1];
-            let v01 = grid[ix][iy + 1];
-
-            let (v00, v10, v11, v01) = match (v00, v10, v11, v01) {
-                (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
-                _ => continue,
-            };
-
-            let sign = |v: f64| v >= 0.0;
-            let s00 = sign(v00);
-            let s10 = sign(v10);
-            let s11 = sign(v11);
-            let s01 = sign(v01);
-
-            let idx = (s00 as u8) | ((s10 as u8) << 1) | ((s11 as u8) << 2) | ((s01 as u8) << 3);
-
-            let x0 = request.x_min + ix as f64 * dx;
-            let y0 = request.y_min + iy as f64 * dy;
-            let x1 = request.x_min + (ix + 1) as f64 * dx;
-            let y1 = request.y_min + (iy + 1) as f64 * dy;
-
-            let edge_points = |e: u8| -> Option<Point> {
-                match e {
-                    0 => {
-                        let t = lerp_zero(v01, v11)?;
-                        Some(Point {
-                            x: x0 + t * (x1 - x0),
-                            y: y1,
-                        })
-                    }
-                    1 => {
-                        let t = lerp_zero(v10, v11)?;
-                        Some(Point {
-                            x: x1,
-                            y: y0 + t * (y1 - y0),
-                        })
-                    }
-                    2 => {
-                        let t = lerp_zero(v00, v10)?;
-                        Some(Point {
-                            x: x0 + t * (x1 - x0),
-                            y: y0,
-                        })
-                    }
-                    3 => {
-                        let t = lerp_zero(v00, v01)?;
-                        Some(Point {
-                            x: x0,
-                            y: y0 + t * (y1 - y0),
-                        })
-                    }
-                    _ => None,
-                }
-            };
-
-            let edges = if idx == 5 || idx == 10 {
-                // 중심을 직접 평가하고, 정의되지 않으면 네 꼭짓점 평균으로 대체
-                let center = eval_cell(&func, (x0 + x1) / 2.0, (y0 + y1) / 2.0)
-                    .unwrap_or((v00 + v10 + v11 + v01) / 4.0);
-                saddle_edges(idx, center >= 0.0)
-            } else {
-                MS_EDGES[idx as usize]
-            };
-            for seg in edges {
-                if let (Some(p1), Some(p2)) = (edge_points(seg.0), edge_points(seg.1)) {
-                    // 꼭짓점이 정확히 곡선 위(f=0)면 두 끝점이 같은 길이 0 선분이 생김
-                    if !point_eq(&p1, &p2, SEGMENT_EPS) {
-                        segments.push((p1, p2));
-                    }
-                }
+    for ix in 0..cells {
+        for iy in 0..cells {
+            if let Some(sub) = refined.get(&(ix, iy)) {
+                sub.march(&func, &mut segments);
+            } else if let Some(v) = corners(ix, iy) {
+                march_cell(&func, xs[ix], xs[ix + 1], ys[iy], ys[iy + 1], v, &mut segments);
             }
         }
     }
 
     // Connect segments into polylines
-    let curves = connect_segments(segments);
+    // 끝점 비교 단위: 셀 크기의 백만분의 일 (같은 공유 변 위의 점은 비트 단위로 같고,
+    // 꼭짓점(t=0/1)에서 생기는 반올림 차이만 흡수하면 됨)
+    let curves = connect_segments(segments, dx.min(dy) * 1e-6);
     Ok(curves)
 }
 
@@ -377,53 +503,54 @@ fn point_eq(a: &Point, b: &Point, eps: f64) -> bool {
     (a.x - b.x).abs() < eps && (a.y - b.y).abs() < eps
 }
 
-fn connect_segments(mut segments: Vec<(Point, Point)>) -> Vec<Vec<Point>> {
-    const EPS: f64 = SEGMENT_EPS;
+/// 끝점을 quantum 단위로 양자화한 해시 키
+type PointKey = (i64, i64);
+
+fn point_key(p: &Point, quantum: f64) -> PointKey {
+    ((p.x / quantum).round() as i64, (p.y / quantum).round() as i64)
+}
+
+/// 선분들을 끝점이 같은 것끼리 이어 폴리라인(닫힌 곡선은 첫 점 = 마지막 점)으로 만든다.
+/// 끝점 키 → 선분 목록 해시맵으로 다음 선분을 찾으므로 O(n). (기존: 매번 전체 선형 탐색 O(n²))
+fn connect_segments(segments: Vec<(Point, Point)>, quantum: f64) -> Vec<Vec<Point>> {
+    let keys: Vec<(PointKey, PointKey)> = segments
+        .iter()
+        .map(|(a, b)| (point_key(a, quantum), point_key(b, quantum)))
+        .collect();
+    let mut by_point: HashMap<PointKey, Vec<usize>> = HashMap::with_capacity(segments.len() * 2);
+    for (i, (ka, kb)) in keys.iter().enumerate() {
+        by_point.entry(*ka).or_default().push(i);
+        by_point.entry(*kb).or_default().push(i);
+    }
+    let mut used = vec![false; segments.len()];
+
+    // key 에 닿은 아직 안 쓴 선분 하나를 쓰고, 그 선분의 반대쪽 끝점과 키를 반환
+    let take_next = |key: PointKey, used: &mut Vec<bool>| -> Option<(Point, PointKey)> {
+        let idx = *by_point.get(&key)?.iter().find(|&&i| !used[i])?;
+        used[idx] = true;
+        let (ka, kb) = keys[idx];
+        let (a, b) = &segments[idx];
+        Some(if ka == key { (b.clone(), kb) } else { (a.clone(), ka) })
+    };
+
     let mut curves: Vec<Vec<Point>> = Vec::new();
-
-        while let Some((start, end)) = segments.pop() {
-        let mut curve = vec![start.clone(), end.clone()];
-
-        loop {
-            let mut found = false;
-            for i in (0..segments.len()).rev() {
-                let (a, b) = &segments[i];
-                let head = curve.first().unwrap();
-                let tail = curve.last().unwrap();
-
-                if point_eq(a, tail, EPS) {
-                    curve.push(b.clone());
-                    segments.remove(i);
-                    found = true;
-                    break;
-                }
-                if point_eq(b, tail, EPS) {
-                    curve.push(a.clone());
-                    segments.remove(i);
-                    found = true;
-                    break;
-                }
-                if point_eq(a, head, EPS) {
-                    curve.insert(0, b.clone());
-                    segments.remove(i);
-                    found = true;
-                    break;
-                }
-                if point_eq(b, head, EPS) {
-                    curve.insert(0, a.clone());
-                    segments.remove(i);
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                break;
-            }
+    for start in 0..segments.len() {
+        if used[start] {
+            continue;
         }
-
-        if curve.len() >= 2 {
-            curves.push(curve);
+        used[start] = true;
+        let (a, b) = &segments[start];
+        let (mut head, mut tail) = keys[start];
+        let mut curve = VecDeque::from([a.clone(), b.clone()]);
+        while let Some((p, key)) = take_next(tail, &mut used) {
+            curve.push_back(p);
+            tail = key;
         }
+        while let Some((p, key)) = take_next(head, &mut used) {
+            curve.push_front(p);
+            head = key;
+        }
+        curves.push(curve.into());
     }
 
     curves
@@ -688,6 +815,72 @@ mod implicit_tests {
                 assert!((r_sq - 1.0).abs() < 0.1, "point ({}, {}) not on circle: r^2={}", p.x, p.y, r_sq);
             }
         }
+    }
+
+    #[test]
+    fn test_closed_curves_are_closed() {
+        // 원은 곡선 하나, 첫 점 = 마지막 점. sin(3x)sin(3y) 의 안쪽 칸들도 각각 닫힌 곡선
+        let circle = calculate_implicit(imp_req("x^2 + y^2 - 1", -2.0, 2.0, -2.0, 2.0, 50)).unwrap();
+        assert_eq!(circle.len(), 1);
+        let c = &circle[0];
+        assert!(point_eq(&c[0], &c[c.len() - 1], 1e-9), "circle not closed");
+
+        let cells = calculate_implicit(imp_req("sin(3*x)*sin(3*y)+0.5", -2.03, 1.97, -2.03, 1.97, 80)).unwrap();
+        for curve in &cells {
+            let (a, b) = (&curve[0], &curve[curve.len() - 1]);
+            let inside = |p: &Point| p.x > -2.0 && p.x < 1.9 && p.y > -2.0 && p.y < 1.9;
+            if inside(a) && inside(b) {
+                assert!(point_eq(a, b, 1e-9), "interior curve not closed: {:?} .. {:?}", a, b);
+            }
+        }
+    }
+
+    #[test]
+    fn test_grid_lines_avoid_symmetric_vertices() {
+        let xs = grid_lines(-10.0, 10.0, 241, GRID_OFFSET_X);
+        let ys = grid_lines(-10.0, 10.0, 241, GRID_OFFSET_Y);
+        // 양 끝은 범위 경계 그대로
+        assert_eq!((xs[0], xs[240]), (-10.0, 10.0));
+        assert_eq!((ys[0], ys[240]), (-10.0, 10.0));
+        // 안쪽 꼭짓점이 x = 0, x = ±y 위에 놓이지 않음 (끝점끼리 만나는 모서리 제외)
+        for &x in &xs[1..240] {
+            assert!(x.abs() > 1e-6);
+            for &y in &ys[1..240] {
+                assert!((x - y).abs() > 1e-6 && (x + y).abs() > 1e-6, "vertex on diagonal: ({}, {})", x, y);
+            }
+        }
+    }
+
+    #[test]
+    fn test_thin_band_is_refined() {
+        // |xy| = 0.1: 축 근처에서 두 가지 사이 간격(0.2/|x|)이 격자 한 칸(0.1)보다 좁아짐.
+        // 예전엔 |x|≈2 에서 두 가지가 축을 가로지르는 선으로 이어지고 그 바깥은 사라졌음.
+        let r = 24.0;
+        let curves = calculate_implicit(imp_req("abs(x*y)-0.1", -r, r, -r, r, 480)).unwrap();
+        assert_eq!(curves.len(), 4, "one curve per quadrant, got {}", curves.len());
+        let points: Vec<&Point> = curves.iter().flatten().collect();
+        // 네 방향 모두 범위 끝까지 그려짐
+        assert!(points.iter().any(|p| p.x > r - 0.5) && points.iter().any(|p| p.x < -(r - 0.5)));
+        assert!(points.iter().any(|p| p.y > r - 0.5) && points.iter().any(|p| p.y < -(r - 0.5)));
+        // 모든 점이 실제 곡선에서 하위 셀 크기(0.1 / 4) 이내
+        for p in points {
+            let distance = ((p.x * p.y).abs() - 0.1).abs() / p.x.hypot(p.y);
+            assert!(distance < 0.025, "point ({}, {}) is {} away from |xy| = 0.1", p.x, p.y, distance);
+        }
+    }
+
+    #[test]
+    fn test_crossing_lines_on_symmetric_range() {
+        // 대칭 범위: 예전엔 원점 셀의 네 꼭짓점이 모두 f = 0 이라 교차점에 틈이 생김 (곡선 3개)
+        let curves = calculate_implicit(imp_req("(x^(2)-y^(2))-(0)", -16.0, 16.0, -16.0, 16.0, 320)).unwrap();
+        assert_eq!(curves.len(), 2, "expected 2 curves, got {}", curves.len());
+        let length: f64 = curves
+            .iter()
+            .flat_map(|c| c.windows(2))
+            .map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y))
+            .sum();
+        let diagonals = 2.0 * 32.0 * 2f64.sqrt();
+        assert!((length - diagonals).abs() < 0.2, "drawn length {} vs {}", length, diagonals);
     }
 
     #[test]

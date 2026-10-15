@@ -1,25 +1,10 @@
-import { useRef, useEffect, useState } from 'react';
-import { Mafs, Plot, Theme } from 'mafs';
+import { useRef, useEffect, useMemo, useState } from 'react';
+import { Mafs, Polyline, Theme } from 'mafs';
 import { useGraphStore } from '../store/graphStore';
-import type { Point } from '../store/graphStore';
 import { DEFAULT_VIEW } from '../constants';
 import { AdaptiveCoordinates } from './AdaptiveCoordinates';
 import { ViewportObserver } from './ViewportObserver';
 import styles from './GraphCanvas.module.scss';
-
-
-function interpolatePoints(points: Point[], t: number): [number, number] {
-    if (points.length === 0) return [0, 0];
-    if (points.length === 1) return [points[0].x, points[0].y];
-
-    const n = points.length - 1;
-    const idx = t * n;
-    const i = Math.min(Math.floor(idx), n - 1);
-    const frac = idx - i;
-    const p0 = points[i];
-    const p1 = points[i + 1];
-    return [p0.x + frac * (p1.x - p0.x), p0.y + frac * (p1.y - p0.y)];
-}
 
 export function GraphCanvas() {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -40,6 +25,15 @@ export function GraphCanvas() {
         compute,
         setViewportBounds,
     } = useGraphStore();
+
+    // Mafs Polyline 형식([x, y][])으로 한 번만 변환. 점이 1개뿐인 조각은 그릴 선이 없음
+    const polylines = useMemo(
+        () =>
+            curves
+                .filter((curve) => curve.length >= 2)
+                .map((curve) => curve.map((p): [number, number] => [p.x, p.y])),
+        [curves]
+    );
 
     useEffect(() => {
         const el = containerRef.current;
@@ -97,16 +91,10 @@ export function GraphCanvas() {
                     />
                 )}
                 <AdaptiveCoordinates />
-                {curves.map((curve, i) =>
-                    curve.length >= 2 ? (
-                        <Plot.Parametric
-                            key={i}
-                            domain={[0, 1]}
-                            xy={(t) => interpolatePoints(curve, t)}
-                            color={Theme.blue}
-                        />
-                    ) : null
-                )}
+                {/* 계산된 점을 그대로 잇는다. (기존 Plot.Parametric 은 팬/줌마다 보간 함수를 다시 샘플링) */}
+                {polylines.map((points, i) => (
+                    <Polyline key={i} points={points} color={Theme.blue} />
+                ))}
             </Mafs>
         </div>
     );

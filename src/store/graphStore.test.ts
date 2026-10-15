@@ -8,7 +8,7 @@ vi.mock('../api', () => ({
 
 import { calculateGraph, calculateImplicit } from '../api';
 import { useGraphStore } from './graphStore';
-import { DEFAULT_BOUNDS, POINTS_PER_VIEW } from '../constants';
+import { DEFAULT_BOUNDS, IMPLICIT_CELLS_PER_VIEW, MAX_CACHE_ENTRIES, POINTS_PER_VIEW } from '../constants';
 
 const graphMock = vi.mocked(calculateGraph);
 const implicitMock = vi.mocked(calculateImplicit);
@@ -40,7 +40,7 @@ beforeEach(() => {
 });
 
 describe('compute: 계산 범위', () => {
-  it('auto 모드는 수동 범위가 아니라 현재 뷰포트를 계산한다', async () => {
+  it('auto 모드는 수동 범위가 아니라 현재 뷰포트(+ 양옆 25% 여유)를 계산한다', async () => {
     graphMock.mockResolvedValue(pts(1));
     store().setRange2D(-10, 10, -10, 10, 0.1);
     store().setViewportBounds({ xMin: 90, xMax: 110, yMin: -5, yMax: 5 });
@@ -50,8 +50,9 @@ describe('compute: 계산 범위', () => {
 
     expect(graphMock).toHaveBeenCalledWith({
       formula: 'x',
-      x_min: 90,
-      x_max: 110,
+      x_min: 85,
+      x_max: 115,
+      // 샘플 간격은 여유를 뺀 화면 폭 기준
       step: 20 / POINTS_PER_VIEW,
     });
   });
@@ -62,12 +63,16 @@ describe('compute: 계산 범위', () => {
 
     await store().compute();
 
+    const xPad = (DEFAULT_BOUNDS.xMax - DEFAULT_BOUNDS.xMin) / 4;
+    const yPad = (DEFAULT_BOUNDS.yMax - DEFAULT_BOUNDS.yMin) / 4;
     expect(implicitMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        x_min: DEFAULT_BOUNDS.xMin,
-        x_max: DEFAULT_BOUNDS.xMax,
-        y_min: DEFAULT_BOUNDS.yMin,
-        y_max: DEFAULT_BOUNDS.yMax,
+        x_min: DEFAULT_BOUNDS.xMin - xPad,
+        x_max: DEFAULT_BOUNDS.xMax + xPad,
+        y_min: DEFAULT_BOUNDS.yMin - yPad,
+        y_max: DEFAULT_BOUNDS.yMax + yPad,
+        // 화면 한 변 320칸 × (1 + 여유 0.25×2)
+        grid_size: IMPLICIT_CELLS_PER_VIEW * 1.5,
       })
     );
   });
@@ -150,6 +155,27 @@ describe('compute: 결과 반영', () => {
     await store().compute();
 
     expect(store().curves).toEqual([]);
+    expect(graphMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('compute: 캐시', () => {
+  it('최근에 다시 쓴 항목은 오래된 항목보다 늦게 밀려난다 (LRU)', async () => {
+    graphMock.mockImplementation(async ({ formula }) => pts(Number(formula)));
+    const show = async (n: number) => {
+      store().setExpression(String(n), 'explicit');
+      await store().compute();
+    };
+
+    // 0 ~ MAX-1 을 채운 뒤 0 을 다시 쓰고, 새 항목 하나를 추가 → 1 이 밀려나야 함
+    for (let n = 0; n < MAX_CACHE_ENTRIES; n++) await show(n);
+    await show(0);
+    await show(MAX_CACHE_ENTRIES);
+    graphMock.mockClear();
+
+    await show(0);
+    expect(graphMock).not.toHaveBeenCalled();
+    await show(1);
     expect(graphMock).toHaveBeenCalledTimes(1);
   });
 });
