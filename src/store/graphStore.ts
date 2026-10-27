@@ -11,8 +11,21 @@ export type ViewportMode = 'auto' | 'manual';
 /** 수식 타입: y=f(x) vs f(x,y)=0 */
 export type FormulaType = 'explicit' | 'implicit';
 
-/** x 범위 상한 (|xMax - xMin| ≤ 2e6). 극단적 줌 아웃 시 포인트 폭증 방지 */
+/**
+ * 범위 폭 상한 (x, y 각각 |max - min| ≤ 2e6).
+ * 이보다 넓으면 Mafs 좌표 변환 정밀도 한계로 그래프가 검게 깨진다 (±1e6 정상, ±1e9 깨짐 확인).
+ * auto 모드는 줌 한계(0.1배)로 실제로는 닿지 않는 방어선이고, 수동 범위 입력은 isWithinRangeLimit 로 막는다.
+ */
 export const X_RANGE_LIMIT = 2e6;
+
+/**
+ * 수동 범위 입력값 허용 여부: 크기가 X_RANGE_LIMIT / 2 (±1e6) 이내.
+ * 폭(max - min)으로 검사하면 범위를 멀리 옮길 때 어느 칸을 먼저 고쳐도 중간 상태의 폭이
+ * 상한을 넘어 입력이 막히므로, 값 하나씩 크기로 검사한다 (폭은 자동으로 2e6 이하).
+ */
+export function isWithinRangeLimit(value: number): boolean {
+  return Number.isFinite(value) && Math.abs(value) <= X_RANGE_LIMIT / 2;
+}
 
 export interface ViewportBounds {
   xMin: number;

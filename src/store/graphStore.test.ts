@@ -7,7 +7,7 @@ vi.mock('../api', () => ({
 }));
 
 import { calculateGraph, calculateImplicit } from '../api';
-import { useGraphStore } from './graphStore';
+import { isWithinRangeLimit, useGraphStore } from './graphStore';
 import { DEFAULT_BOUNDS, IMPLICIT_CELLS_PER_VIEW, MAX_CACHE_ENTRIES, POINTS_PER_VIEW } from '../constants';
 
 const graphMock = vi.mocked(calculateGraph);
@@ -189,5 +189,17 @@ describe('submitExpression', () => {
 
     expect(store().recomputeToken).toBe(before + 1);
     expect(store().formula).toBe('x');
+  });
+});
+
+describe('isWithinRangeLimit', () => {
+  it('allows values within ±1e6 and rejects beyond or non-finite', () => {
+    expect(isWithinRangeLimit(0)).toBe(true);
+    expect(isWithinRangeLimit(-1e6)).toBe(true);
+    expect(isWithinRangeLimit(1e6)).toBe(true);
+    expect(isWithinRangeLimit(1e6 + 1)).toBe(false);
+    expect(isWithinRangeLimit(-1e9)).toBe(false);
+    expect(isWithinRangeLimit(NaN)).toBe(false);
+    expect(isWithinRangeLimit(Infinity)).toBe(false);
   });
 });

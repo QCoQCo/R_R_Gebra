@@ -48,6 +48,14 @@
   }
 }
 
+/* 수동 범위 입력값이 허용 범위를 벗어남 (반영되지 않고, 포커스를 잃으면 원래 값으로).
+   테마별 규칙이 모두 var(--color-border)로 테두리를 그리므로 변수만 바꿔 어느 테마에서나 적용 */
+.row input[aria-invalid='true'] {
+  --color-border: var(--color-error);
+  border-color: var(--color-error);
+  outline-color: var(--color-error);
+}
+
 button {
   align-self: flex-start;
 }

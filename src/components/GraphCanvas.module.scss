@@ -1,8 +1,10 @@
-/* 4.5 그래프 영역 - box-shadow 카드 느낌 */
+/* 4.5 그래프 영역 - box-shadow 카드 느낌.
+   고정 비율 대신 남는 높이를 채움 (Mafs 가 x·y 단위 길이를 같게 유지하므로 비율이 달라도 찌그러지지 않음) */
 .canvas {
   position: relative;
   width: 100%;
-  aspect-ratio: 1.25;
+  flex: 1 1 auto;
+  min-height: 320px;
   border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--color-bg-elevated);

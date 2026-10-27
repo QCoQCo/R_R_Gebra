@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import 'mathlive';
-import { useGraphStore } from '../store/graphStore';
+import { isWithinRangeLimit, useGraphStore } from '../store/graphStore';
 import type { FormulaType } from '../store/graphStore';
 import {
     latexToMeval,
@@ -33,17 +33,30 @@ interface NumberInputProps {
     value: number;
     onCommit: (value: number) => void;
     isValid?: (value: number) => boolean;
+    /** 입력값이 유효하지 않을 때 툴팁으로 보여 줄 안내 */
+    invalidMessage?: string;
     step: string;
     min?: string;
 }
+
+const RANGE_LIMIT_MESSAGE = '범위는 -1,000,000 ~ 1,000,000 사이로 입력해 주세요 (그래프 표시 한계)';
 
 /**
  * 스토어 값과 연결된 숫자 입력.
  * 빈 칸, "-" 같은 입력 도중 상태나 유효하지 않은 값은 스토어에 반영하지 않고,
  * 포커스를 잃으면 마지막으로 반영된 값으로 되돌린다. (기존: 칸을 비우면 즉시 0 반영)
  */
-function NumberInput({ id, value, onCommit, isValid = Number.isFinite, step, min }: NumberInputProps) {
+function NumberInput({
+    id,
+    value,
+    onCommit,
+    isValid = Number.isFinite,
+    invalidMessage,
+    step,
+    min,
+}: NumberInputProps) {
     const [draft, setDraft] = useState(String(value));
+    const invalid = draft.trim() !== '' && !isValid(Number(draft));
 
     // 바깥에서 값이 바뀌면 동기화. "1." 처럼 같은 값을 뜻하는 입력 중 초안은 유지
     useEffect(() => {
@@ -62,6 +75,8 @@ function NumberInput({ id, value, onCommit, isValid = Number.isFinite, step, min
                 if (text.trim() !== '' && isValid(next)) onCommit(next);
             }}
             onBlur={() => setDraft(String(value))}
+            aria-invalid={invalid}
+            title={invalid ? invalidMessage : undefined}
             step={step}
             min={min}
         />
@@ -228,6 +243,8 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                             <NumberInput
                                 id='xMin'
                                 value={xMin}
+                                isValid={isWithinRangeLimit}
+                                invalidMessage={RANGE_LIMIT_MESSAGE}
                                 onCommit={(v) => setRange2D(v, xMax, yMin, yMax, step)}
                                 step='0.5'
                             />
@@ -235,6 +252,8 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                             <NumberInput
                                 id='xMax'
                                 value={xMax}
+                                isValid={isWithinRangeLimit}
+                                invalidMessage={RANGE_LIMIT_MESSAGE}
                                 onCommit={(v) => setRange2D(xMin, v, yMin, yMax, step)}
                                 step='0.5'
                             />
@@ -242,6 +261,8 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                             <NumberInput
                                 id='yMin'
                                 value={yMin}
+                                isValid={isWithinRangeLimit}
+                                invalidMessage={RANGE_LIMIT_MESSAGE}
                                 onCommit={(v) => setRange2D(xMin, xMax, v, yMax, step)}
                                 step='0.5'
                             />
@@ -249,6 +270,8 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
                             <NumberInput
                                 id='yMax'
                                 value={yMax}
+                                isValid={isWithinRangeLimit}
+                                invalidMessage={RANGE_LIMIT_MESSAGE}
                                 onCommit={(v) => setRange2D(xMin, xMax, yMin, v, step)}
                                 step='0.5'
                             />
