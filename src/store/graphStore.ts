@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { calculateGraph, calculateImplicit } from '../api';
 import type { Point } from '../api';
 import { DEFAULT_BOUNDS, MAX_CACHE_ENTRIES, computeWindow } from '../constants';
+import { friendlyError } from '../utils/friendlyError';
 
 export type { Point };
 
@@ -103,7 +104,6 @@ interface GraphState {
    * - 더 최신 호출이 있으면 결과를 버림
    */
   compute: () => Promise<void>;
-  invalidateCache: () => void;
   reset: () => void;
 }
 
@@ -181,10 +181,12 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       }
       if (isLatest()) set({ curves, loading: false, error: null });
     } catch (err) {
-      if (isLatest()) set({ error: err instanceof Error ? err.message : String(err), loading: false });
+      if (isLatest()) {
+        const raw = err instanceof Error ? err.message : String(err);
+        set({ error: friendlyError(raw), loading: false });
+      }
     }
   },
-  invalidateCache: () => set({ curveCache: new Map() }),
   reset: () =>
     set({
       ...defaultState,

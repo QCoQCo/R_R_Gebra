@@ -7,12 +7,30 @@ const UNSUPPORTED_PATTERNS = [
 
 export type FormulaType = 'explicit' | 'implicit';
 
-/** 수식에 = 가 있고 "y =" 형태가 아니면 암시적 방정식 */
+/**
+ * y = f(x) 접두사: "y =", "f(x) =", "g\left(x\right) =" 등. 떼어 내고 오른쪽만 계산한다.
+ * 함수 이름은 x, y 를 뺀 한 글자 (GeoGebra 식 입력 "f(x) = x^2" 대응)
+ */
+const EXPLICIT_PREFIX = /^\s*(?:y|[a-wz]\s*(?:\\m?left)?\(\s*x\s*(?:\\m?right)?\))\s*=\s*/i;
+
+/**
+ * 수식 타입 판정
+ * - "y = …", "f(x) = …" → explicit
+ * - 그 밖에 = 가 있으면 → implicit (좌변 - 우변 = 0)
+ * - = 가 없으면 변수 y 를 쓸 때 implicit (식 = 0), 아니면 explicit (y = 식)
+ */
 export function detectFormulaType(latex: string): FormulaType {
   const s = stripMathDelimiters(latex);
-  if (!s.includes('=')) return 'explicit';
-  if (/^\s*y\s*=/i.test(s)) return 'explicit';
-  return 'implicit';
+  if (EXPLICIT_PREFIX.test(s)) return 'explicit';
+  if (s.includes('=')) return 'implicit';
+  return usesVariableY(s) ? 'implicit' : 'explicit';
+}
+
+/** 변환한 식에 변수 y 가 있는지 (함수 이름 등에 들어간 y 는 제외하도록 토큰 단위로 확인) */
+function usesVariableY(latex: string): boolean {
+  return tokenizeMeval(convertLatex(normalizeLatex(latex))).some(
+    (t) => t.kind === 'name' && t.text === 'y'
+  );
 }
 
 export function checkUnsupportedLatex(latex: string, _formulaType?: FormulaType): string | null {
@@ -66,6 +84,7 @@ const LATEX_FUNCTIONS = new Map(Object.entries({
   log: 'log',
   exp: 'exp',
   abs: 'abs',
+  mod: 'mod',
 }));
 
 /** LaTeX 상수 명령 → meval 상수. \exponentialE 는 MathLive 가상 키보드의 e 키 출력 */
@@ -147,7 +166,6 @@ class LatexReader {
  * - \left( \right) \mleft \mright 제거 (구분자만 남김), \left. \right. 제거
  * - \vert \lvert \rvert \mid → |, \lbrack \rbrack \lparen \rparen → [ ] ( )
  * - |x| → \abs(x)
- * - 1\%5 → (1)/(5) (나머지 연산 대신 분수로 해석)
  */
 function normalizeLatex(s: string): string {
   s = s.replace(/\\m?(?:left|right)\s*\./g, '');
@@ -156,7 +174,6 @@ function normalizeLatex(s: string): string {
   s = s.replace(/\\([lr])(brack|paren)(?![a-zA-Z])/g, (_, side, kind) =>
     kind === 'brack' ? (side === 'l' ? '[' : ']') : side === 'l' ? '(' : ')'
   );
-  s = s.replace(/(\d+(?:\.\d+)?)\\%(\d+(?:\.\d+)?)/g, (_, a, b) => `(${a})/(${b})`);
   return convertAbsBars(s);
 }
 
@@ -313,6 +330,7 @@ const MEVAL_FUNCTIONS = new Set([
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan',
   'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh',
   'floor', 'ceil', 'round', 'signum', 'max', 'min',
+  'mod', // math_engine.rs 에서 추가
 ]);
 
 /** 문자열 안에서 식별자를 나눌 때 우선 매칭할 이름 (긴 이름 우선) */
@@ -387,6 +405,42 @@ function wrapBareFunctionArguments(tokens: Token[]): Token[] {
   return out;
 }
 
+const symbol = (text: string): Token => ({ kind: 'symbol', text });
+
+/** tokens 끝에 있는 피연산자(숫자·변수·괄호 묶음, 앞의 함수 이름 포함)가 시작하는 위치 */
+function operandStart(tokens: Token[]): number | null {
+  let i = tokens.length - 1;
+  if (i < 0) return null;
+  if (tokens[i].kind === 'number' || tokens[i].kind === 'name') return i;
+  if (tokens[i].text !== ')') return null;
+  let depth = 0;
+  for (; i >= 0; i--) {
+    if (tokens[i].text === ')') depth++;
+    else if (tokens[i].text === '(' && --depth === 0) break;
+  }
+  if (i < 0) return null;
+  return i > 0 && tokens[i - 1].kind === 'function' ? i - 1 : i;
+}
+
+/**
+ * 뒤에 붙는 % 를 ÷100 으로 (GeoGebra·Desmos 처럼 퍼센트. 나머지 연산은 mod(a, b)).
+ * 50% → (50/100), (x+1)% → ((x+1)/100), 30%600 → (30/100)600 → 이후 곱셈 삽입으로 0.3×600.
+ * 바로 앞 피연산자만 묶으므로 x/50% 도 x/(50/100) 로 계산된다.
+ */
+function applyPercent(tokens: Token[]): Token[] {
+  const out: Token[] = [];
+  for (const tok of tokens) {
+    const start = tok.text === '%' ? operandStart(out) : null;
+    if (start === null) {
+      out.push(tok); // % 가 아니거나 앞에 피연산자가 없으면 그대로 (후자는 meval 오류로 드러남)
+      continue;
+    }
+    out.splice(start, 0, symbol('('));
+    out.push(symbol('/'), { kind: 'number', text: '100' }, symbol(')'));
+  }
+  return out;
+}
+
 /**
  * meval 은 암묵적 곱셈을 지원하지 않으므로 명시적 * 삽입.
  * 2x → 2*x, xy → x*y, x(x+1) → x*(x+1), sin(x)cos(x) → sin(x)*cos(x)
@@ -394,7 +448,7 @@ function wrapBareFunctionArguments(tokens: Token[]): Token[] {
 function insertImplicitMultiplication(expr: string): string {
   let out = '';
   let prev: Token | null = null;
-  for (const tok of wrapBareFunctionArguments(tokenizeMeval(expr))) {
+  for (const tok of wrapBareFunctionArguments(applyPercent(tokenizeMeval(expr)))) {
     if (prev && endsOperand(prev) && startsOperand(tok)) out += '*';
     out += tok.text;
     prev = tok;
@@ -411,7 +465,7 @@ export function latexToMeval(latex: string, stripYPrefix = true): string {
   if (!latex || !latex.trim()) return '';
 
   let s = stripMathDelimiters(latex);
-  if (stripYPrefix) s = s.replace(/^\s*y\s*=\s*/i, '');
+  if (stripYPrefix) s = s.replace(EXPLICIT_PREFIX, '');
 
   return insertImplicitMultiplication(convertLatex(normalizeLatex(s)));
 }
@@ -419,12 +473,13 @@ export function latexToMeval(latex: string, stripYPrefix = true): string {
 /**
  * Converts implicit equation f(x,y)=0 LaTeX to meval: (left)-(right).
  * e.g. "x^2+y^2-1=0" → "(x^(2)+y^(2)-1)-(0)", "x^2+y^2=1" → "(x^(2)+y^(2))-(1)"
+ * = 가 없으면 식 = 0 으로 본다: "x^2+y^2-1" → "(x^(2)+y^(2)-1)-(0)"
  */
 export function latexToMevalImplicit(latex: string): string | null {
   if (!latex || !latex.trim()) return null;
 
-  const parts = splitAtEquals(stripMathDelimiters(latex));
-  if (!parts) return null;
+  const s = stripMathDelimiters(latex);
+  const parts = splitAtEquals(s) ?? [s, '0'];
 
   const [left, right] = parts;
   const leftMeval = latexToMeval(left, false);

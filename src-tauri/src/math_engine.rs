@@ -6,10 +6,22 @@ fn log10_fn(x: f64) -> f64 {
     x.ln() / 10_f64.ln()
 }
 
+/// mod(a, b): 나머지. 결과 부호는 b 를 따름 (mod(-7, 3) = 2, Python 의 % 와 같음). b = 0 이면 NaN.
+/// GeoGebra 의 Mod(a, b) 에 대응 (% 는 퍼센트로 쓰므로 나머지는 함수로만 제공)
+fn mod_fn(a: f64, b: f64) -> f64 {
+    let r = a % b;
+    if r != 0.0 && (r < 0.0) != (b < 0.0) {
+        r + b
+    } else {
+        r
+    }
+}
+
 fn math_context() -> meval::Context<'static> {
     let mut ctx = meval::Context::new();
     ctx.func("log", log10_fn)
-        .func("log10", log10_fn);
+        .func("log10", log10_fn)
+        .func2("mod", mod_fn);
     ctx
 }
 
@@ -282,6 +294,36 @@ fn may_cross_inside(grid: &[Vec<Option<f64>>], ix: usize, iy: usize, v: &[f64; 4
     min_abs < variation
 }
 
+/// 극 판정 시 부호가 바뀌는 구간을 반으로 좁히는 횟수
+const POLE_CHECK_BISECTIONS: usize = 6;
+
+/// 변 a→b 위의 부호 변화(va, vb 부호가 다름)가 실제 근이 아니라 극(1/x 의 x=0, tan 의 π/2 등)을
+/// 지나며 생긴 것인지 판정한다. 부호가 바뀌는 구간을 몇 번 반으로 좁혀 보면, 근이면 양 끝 |f| 가
+/// 구간과 함께 작아지고 극이면 오히려 커진다(또는 도중에 정의되지 않음).
+/// 극을 곡선으로 착각하면 marching squares 가 극을 따라 가짜 선을 그린다.
+fn is_pole_crossing(f: &dyn Fn(f64, f64) -> f64, a: &Point, b: &Point, va: f64, vb: f64) -> bool {
+    let start = va.abs().max(vb.abs());
+    let (mut lo, mut flo, mut hi, mut fhi) = (0.0, va, 1.0, vb);
+    for _ in 0..POLE_CHECK_BISECTIONS {
+        let mid = 0.5 * (lo + hi);
+        let Some(fm) = eval_cell(f, a.x + mid * (b.x - a.x), a.y + mid * (b.y - a.y)) else {
+            return true;
+        };
+        if (fm >= 0.0) == (flo >= 0.0) {
+            lo = mid;
+            flo = fm;
+        } else {
+            hi = mid;
+            fhi = fm;
+        }
+        // 근이면 한두 번 만에 절반 아래로 줄어듦 → 바로 판정 (극은 줄지 않고 커지기만 함)
+        if flo.abs().max(fhi.abs()) < 0.5 * start {
+            return false;
+        }
+    }
+    flo.abs().max(fhi.abs()) > start
+}
+
 /// 한 셀(또는 하위 셀)에 marching squares 를 적용해 선분을 out 에 추가한다.
 /// v = [bl, br, tr, tl] 꼭짓점 값.
 fn march_cell(
@@ -297,26 +339,22 @@ fn march_cell(
     let sign = |v: f64| v >= 0.0;
     let idx = (sign(v00) as u8) | ((sign(v10) as u8) << 1) | ((sign(v11) as u8) << 2) | ((sign(v01) as u8) << 3);
 
-    let edge_points = |e: u8| -> Option<Point> {
+    // 변의 양 끝 (시작점, 끝점, 시작값, 끝값). 이웃 셀과 같은 방향이라 공유 변의 판정·교차점이 같음
+    let edge_ends = |e: u8| -> (Point, Point, f64, f64) {
         match e {
-            0 => {
-                let t = lerp_zero(v01, v11)?;
-                Some(Point { x: x0 + t * (x1 - x0), y: y1 })
-            }
-            1 => {
-                let t = lerp_zero(v10, v11)?;
-                Some(Point { x: x1, y: y0 + t * (y1 - y0) })
-            }
-            2 => {
-                let t = lerp_zero(v00, v10)?;
-                Some(Point { x: x0 + t * (x1 - x0), y: y0 })
-            }
-            3 => {
-                let t = lerp_zero(v00, v01)?;
-                Some(Point { x: x0, y: y0 + t * (y1 - y0) })
-            }
-            _ => None,
+            0 => (Point { x: x0, y: y1 }, Point { x: x1, y: y1 }, v01, v11),
+            1 => (Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, v10, v11),
+            2 => (Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, v00, v10),
+            _ => (Point { x: x0, y: y0 }, Point { x: x0, y: y1 }, v00, v01),
         }
+    };
+    let edge_points = |e: u8| -> Option<Point> {
+        let (a, b, va, vb) = edge_ends(e);
+        let t = lerp_zero(va, vb)?;
+        if is_pole_crossing(f, &a, &b, va, vb) {
+            return None;
+        }
+        Some(Point { x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) })
     };
 
     let edges = if idx == 5 || idx == 10 {
@@ -581,6 +619,20 @@ mod tests {
             .iter()
             .map(|piece| (piece[0].x, piece[piece.len() - 1].x))
             .collect()
+    }
+
+    #[test]
+    fn test_mod() {
+        assert_eq!(mod_fn(7.0, 3.0), 1.0);
+        assert_eq!(mod_fn(-7.0, 3.0), 2.0);
+        assert_eq!(mod_fn(7.0, -3.0), -2.0);
+        assert_eq!(mod_fn(7.5, 2.0), 1.5);
+        assert_eq!(mod_fn(6.0, 3.0), 0.0);
+        assert!(mod_fn(1.0, 0.0).is_nan());
+        // y = mod(x, 2): 톱니 모양, x = -2, 0, 2 에서 점프 → 4 구간 (불연속 판정으로 세로선 없음)
+        assert_eq!(piece_ranges("mod(x, 2)", -3.9, 3.9, 0.01).len(), 4);
+        // 인자 개수가 틀리면 오류
+        assert!(calculate_graph(req("mod(x)", 0.0, 1.0, 0.1)).is_err());
     }
 
     #[test]
@@ -881,6 +933,38 @@ mod implicit_tests {
             .sum();
         let diagonals = 2.0 * 32.0 * 2f64.sqrt();
         assert!((length - diagonals).abs() < 0.2, "drawn length {} vs {}", length, diagonals);
+    }
+
+    #[test]
+    fn test_poles_do_not_draw_false_lines() {
+        use std::f64::consts::{FRAC_PI_2, PI};
+        // (식, 실제 곡선이 지나갈 수 없는 위치) — 예전엔 극을 따라 세로선이 그려졌음 (240 / 960 / 220 점)
+        let cases: [(&str, &dyn Fn(f64, f64) -> bool); 3] = [
+            ("((1)/(x))-(y)", &|x, _| x.abs() < 0.1), // 1/x = y: |y| ≤ 6 이면 |x| ≥ 1/6
+            ("(tan(x))-(y)", &|x, _| {
+                let d = (x - FRAC_PI_2).rem_euclid(PI);
+                d.min(PI - d) < 0.1 // 극에서 0.16 이상 떨어져 있어야 함
+            }),
+            ("((1)/(x)+(1)/(y))-(1)", &|x, y| x.abs() < 0.03 && y.abs() > 0.5), // y = x/(x-1)
+        ];
+        for (formula, impossible) in cases {
+            let curves = calculate_implicit(imp_req(formula, -6.0, 6.0, -6.0, 6.0, 240)).unwrap();
+            let bad: Vec<&Point> = curves.iter().flatten().filter(|p| impossible(p.x, p.y)).collect();
+            assert!(bad.is_empty(), "{}: {} points on a pole, e.g. {:?}", formula, bad.len(), bad.first());
+            // 실제 곡선은 남아 있어야 함
+            assert!(curves.iter().map(|c| c.len()).sum::<usize>() > 100, "{}: curve disappeared", formula);
+        }
+    }
+
+    #[test]
+    fn test_steep_roots_are_kept() {
+        // 근 근처에서 크게 휘는 식도 극으로 오판하지 않음: y = sqrt(x) (x ≥ 0), y = x^3
+        let r = calculate_implicit(imp_req("y-sqrt(x)", -1.0, 4.0, -1.0, 3.0, 100)).unwrap();
+        assert_eq!(r.len(), 1);
+        let reach = r[0].iter().map(|p| p.x).fold(f64::MIN, f64::max);
+        assert!(reach > 3.9, "sqrt curve stops at x = {}", reach);
+        let cubic = calculate_implicit(imp_req("y-x^3", -2.0, 2.0, -8.0, 8.0, 100)).unwrap();
+        assert_eq!(cubic.len(), 1);
     }
 
     #[test]

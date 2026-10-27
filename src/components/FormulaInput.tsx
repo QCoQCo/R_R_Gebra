@@ -164,7 +164,9 @@ export function FormulaInput({ theme, setTheme }: FormulaInputProps) {
     }
 
     return (
-        <form className={styles.form} onSubmit={handleSubmit}>
+        // noValidate: 입력값 검증은 NumberInput 이 담당. 브라우저 제약 검증(min, step 배수)이
+        // 앱 검증과 달라 제출이 막히는 것 방지 (예: 간격 0.005 는 반영되는데 제출은 차단됨)
+        <form className={styles.form} onSubmit={handleSubmit} noValidate>
             <div className={styles.row}>
                 <label htmlFor='formula'>수식 f:</label>
                 {React.createElement('math-field', {

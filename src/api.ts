@@ -25,27 +25,12 @@ export interface ImplicitRequest {
 export async function calculateGraph(
   request: GraphRequest
 ): Promise<Point[][]> {
-  return invoke<Point[][]>('calculate_graph', {
-    request: {
-      formula: request.formula,
-      x_min: request.x_min,
-      x_max: request.x_max,
-      step: request.step,
-    },
-  });
+  return invoke<Point[][]>('calculate_graph', { request });
 }
 
+/** f(x, y) = 0 등고선 (marching squares). 곡선별 점 목록을 반환 */
 export async function calculateImplicit(
   request: ImplicitRequest
 ): Promise<Point[][]> {
-  return invoke<Point[][]>('calculate_implicit', {
-    request: {
-      formula: request.formula,
-      x_min: request.x_min,
-      x_max: request.x_max,
-      y_min: request.y_min,
-      y_max: request.y_max,
-      grid_size: request.grid_size,
-    },
-  });
+  return invoke<Point[][]>('calculate_implicit', { request });
 }

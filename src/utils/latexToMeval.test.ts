@@ -70,8 +70,21 @@ describe('latexToMeval', () => {
     ['sinh(x)', 'sinh(x)'],
     ['sqrt(x)+e^{x}', 'sqrt(x)+e^(x)'],
     ['2pix', '2*pi*x'],
-    // 기존 동작 유지: 숫자\%숫자 → 분수
-    ['1\\%5', '(1)/(5)'],
+    // % 는 퍼센트(÷100), 바로 앞 피연산자에만 붙음 (GeoGebra 와 같음)
+    ['50\\%', '(50/100)'],
+    ['30\\%600', '(30/100)*600'],
+    ['x+50\\%', 'x+(50/100)'],
+    ['x/50\\%', 'x/(50/100)'],
+    ['\\left(x+1\\right)\\%', '((x+1)/100)'],
+    ['\\sin(x)\\%', '(sin(x)/100)'],
+    // 나머지 연산
+    ['mod(x,3)', 'mod(x,3)'],
+    ['\\operatorname{mod}\\left(x,2\\right)', 'mod(x,2)'],
+    ['2mod(x,3)', '2*mod(x,3)'],
+    // GeoGebra 식 함수 표기
+    ['f(x)=x^2', 'x^(2)'],
+    ['f\\left(x\\right)=\\sin x', 'sin(x)'],
+    ['g(x) = 2x', '2*x'],
   ])('%s → %s', (latex, expected) => {
     expect(latexToMeval(latex)).toBe(expected);
   });
@@ -93,8 +106,12 @@ describe('latexToMevalImplicit', () => {
     expect(latexToMevalImplicit(latex)).toBe(expected);
   });
 
-  it('returns null without "="', () => {
-    expect(latexToMevalImplicit('x+y')).toBeNull();
+  it('treats an expression without "=" as expression = 0', () => {
+    expect(latexToMevalImplicit('x^2+y^2-1')).toBe('(x^(2)+y^(2)-1)-(0)');
+  });
+
+  it('returns null for blank input', () => {
+    expect(latexToMevalImplicit('  ')).toBeNull();
   });
 });
 
@@ -104,6 +121,14 @@ describe('detectFormulaType', () => {
     ['y=x^2', 'explicit'],
     ['x^2+y^2=1', 'implicit'],
     ['xy=1', 'implicit'],
+    // f(x) = … 는 y = … 와 같음
+    ['f(x)=x^2', 'explicit'],
+    ['g\\left(x\\right)=\\sin x', 'explicit'],
+    // = 가 없어도 y 를 쓰면 식 = 0
+    ['x^2+y^2-1', 'implicit'],
+    ['xy-1', 'implicit'],
+    ['\\sin x', 'explicit'],
+    ['\\left|y\\right|', 'implicit'],
   ])('%s → %s', (latex, expected) => {
     expect(detectFormulaType(latex)).toBe(expected);
   });

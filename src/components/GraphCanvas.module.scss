@@ -87,3 +87,31 @@
     border-top-color: var(--color-primary);
   }
 }
+
+/* 4.8 그래프(Mafs) 색 - Mafs 기본값은 어두운 색이라 라이트 테마에서도 그래프만 검게 보였음.
+   기본(라이트)은 밝은 색, 다크 테마(명시 또는 시스템)에서는 Mafs 기본 어두운 색으로 */
+@mixin mafs-dark-colors {
+  --mafs-bg: black;
+  --mafs-fg: white;
+  --mafs-line-color: #555;
+  --grid-line-subdivision-color: #222;
+  --mafs-blue: #58a6ff;
+}
+
+.canvas :global(.MafsView) {
+  --mafs-bg: #fff;
+  --mafs-fg: #333;
+  --mafs-line-color: #c8c8c8;
+  --grid-line-subdivision-color: #eee;
+  --mafs-blue: #1f6feb;
+}
+
+[data-theme='dark'] .canvas :global(.MafsView) {
+  @include mafs-dark-colors;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .canvas :global(.MafsView) {
+    @include mafs-dark-colors;
+  }
+}

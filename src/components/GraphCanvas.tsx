@@ -2,9 +2,13 @@ import { useRef, useEffect, useMemo, useState } from 'react';
 import { Mafs, Polyline, Theme } from 'mafs';
 import { useGraphStore } from '../store/graphStore';
 import { DEFAULT_VIEW } from '../constants';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { AdaptiveCoordinates } from './AdaptiveCoordinates';
 import { ViewportObserver } from './ViewportObserver';
 import styles from './GraphCanvas.module.scss';
+
+/** 수동 범위 입력이 멈춘 뒤 다시 계산하기까지 기다리는 시간 */
+const MANUAL_RANGE_DEBOUNCE_MS = 300;
 
 export function GraphCanvas() {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -17,6 +21,7 @@ export function GraphCanvas() {
         xMax,
         yMin,
         yMax,
+        step,
         loading,
         viewportMode,
         formula,
@@ -46,11 +51,14 @@ export function GraphCanvas() {
         return () => observer.disconnect();
     }, []);
 
-    // 수식·모드·뷰포트가 바뀌거나 "그래프 그리기"를 누르면 재계산.
-    // manual 모드의 범위 입력은 "그래프 그리기"로 반영 (입력 중 값마다 계산하지 않음).
+    // manual 모드: 범위·간격 입력이 멈추면 다시 계산 (입력값 검증은 NumberInput 이 담당)
+    const manualRangeKey = viewportMode === 'manual' ? `${xMin},${xMax},${yMin},${yMax},${step}` : '';
+    const settledManualRange = useDebouncedValue(manualRangeKey, MANUAL_RANGE_DEBOUNCE_MS);
+
+    // 수식·모드·뷰포트·수동 범위가 바뀌거나 "그래프 그리기"를 누르면 재계산
     useEffect(() => {
         compute();
-    }, [formula, formulaType, viewportMode, viewportBounds, recomputeToken, compute]);
+    }, [formula, formulaType, viewportMode, viewportBounds, settledManualRange, recomputeToken, compute]);
 
     // 수동 범위 입력 도중 최소 ≥ 최대가 되는 순간에는 뒤집힌 범위를 Mafs 에 넘기지 않음
     const useManualView = viewportMode === 'manual' && xMin < xMax && yMin < yMax;
@@ -73,13 +81,16 @@ export function GraphCanvas() {
                     <span>{loading ? '계산 중...' : '준비 중...'}</span>
                 </div>
             )}
+            {/* key: 모드가 바뀌면 다시 마운트해 auto 모드에서 팬/줌한 카메라를 버림.
+                manual 모드는 입력한 범위만 계산하므로 팬/줌을 끔 (움직이면 계산 안 된 영역이 보임) */}
             <Mafs
+                key={viewportMode}
                 width={size.width}
                 height={size.height}
                 viewBox={viewBox}
                 preserveAspectRatio='contain'
-                zoom={{ min: 0.1, max: 10 }}
-                pan={true}
+                zoom={viewportMode === 'auto' ? { min: 0.1, max: 10 } : false}
+                pan={viewportMode === 'auto'}
             >
                 {viewportMode === 'auto' && (
                     <ViewportObserver

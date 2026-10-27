@@ -49,6 +49,13 @@ npm install
 npm run tauri dev
 ```
 
+### 테스트
+
+```bash
+npm test            # 프론트엔드 (vitest)
+npm run test:rust   # 수학 엔진 (cargo test)
+```
+
 ---
 
 ## 아키텍처
@@ -69,93 +76,99 @@ npm run tauri dev
 ```
 R_R_Gebra/
 ├── src/
-│   ├── components/        # FormulaInput, GraphCanvas, ViewportObserver
-│   ├── store/             # graphStore, themeStore
-│   ├── utils/latexToMeval.ts
-│   ├── api.ts             # Tauri invoke 래퍼
-│   └── constants.ts
+│   ├── components/
+│   │   ├── FormulaInput.tsx         # 수식 입력(MathLive), 모드·테마, 수동 범위
+│   │   ├── GraphCanvas.tsx          # Mafs 렌더링, 재계산 시점 결정
+│   │   ├── ViewportObserver.tsx     # auto 모드에서 화면 범위 추적
+│   │   └── AdaptiveCoordinates.tsx  # 확대 배율에 맞춘 축 눈금·라벨
+│   ├── store/                       # graphStore(계산·캐시), themeStore
+│   ├── hooks/useDebouncedValue.ts
+│   ├── utils/
+│   │   ├── latexToMeval.ts          # LaTeX → meval 식, 수식 타입 판정
+│   │   ├── friendlyError.ts         # 엔진 오류 → 한국어 안내
+│   │   └── axisLineInterval.ts      # 눈금 간격·라벨 형식
+│   ├── api.ts                       # Tauri invoke 래퍼
+│   └── constants.ts                 # 계산 범위·해상도 (computeWindow)
 └── src-tauri/src/
-    ├── lib.rs             # Tauri 커맨드 등록
-    └── math_engine.rs     # 수식 파싱·평가 (meval)
+    ├── lib.rs                       # Tauri 커맨드 (async + spawn_blocking)
+    └── math_engine.rs               # 샘플링·marching squares (meval)
 ```
 
 ### 데이터 흐름
 
 ```
-LaTeX 입력 → FormulaInput → latexToMeval() → 수식 타입 감지
-  → 캐시 확인 → (미스 시) Tauri invoke → math_engine
-  → Point[] / Point[][] → 캐시 저장 → GraphCanvas (Mafs 렌더)
+LaTeX 입력 → latexToMeval() (타입 판정·변환) → graphStore
+  → compute(): 범위·해상도 결정 → 캐시 확인 → (미스 시) Tauri invoke → math_engine
+  → 곡선 목록 Point[][] → 캐시 저장 → GraphCanvas (Mafs Polyline)
 ```
+
+- 모든 계산은 `graphStore.compute()` 하나를 거칩니다. 수식·모드·화면 범위·수동 범위가 바뀌거나 "그래프 그리기"를 누르면 `GraphCanvas`가 호출합니다.
+- 늦게 도착한 이전 요청의 결과는 버립니다 (요청 번호 비교).
+- 수식 입력은 500ms, 화면 범위는 250ms, 수동 범위 입력은 300ms 동안 변화가 없을 때 반영합니다.
 
 ### API (`src/api.ts`)
 
-| 함수                | 요청                            | 반환      |
-| ------------------- | ------------------------------- | --------- |
-| `calculateGraph`    | formula, x_min, x_max, step     | Point[]   |
-| `calculateImplicit` | formula, x_min~y_max, grid_size | Point[][] |
+| 함수                | 요청                            | 반환                                         |
+| ------------------- | ------------------------------- | -------------------------------------------- |
+| `calculateGraph`    | formula, x_min, x_max, step     | `Point[][]` — 점근선·정의역 경계에서 끊긴 구간 |
+| `calculateImplicit` | formula, x_min~y_max, grid_size | `Point[][]` — 등고선별 곡선                  |
 
-### 캐시
+### 계산 범위와 캐시
 
-- LRU 최대 20건 (graphCache, implicitCache 각각).
-- Explicit 키: `formula|xMin|xMax|step`
-- Implicit 키: `formula|xMin|xMax|yMin|yMax|gridSize`
-
----
-
-## 컴포넌트
-
-- **FormulaInput** (`src/components/FormulaInput.tsx`): MathLive LaTeX 입력, 수식 타입(explicit/implicit) 감지, 뷰포트 모드(자동/수동), 테마, 수동 범위(x/yMin/Max, step). 500ms 디바운스.
-- **GraphCanvas** (`src/components/GraphCanvas.tsx`): Mafs로 그래프 렌더. Explicit는 포인트 배열, Implicit는 marching squares로 여러 곡선. ResizeObserver, 캐시 조회 후 API 호출.
-- **ViewportObserver** (`src/components/ViewportObserver.tsx`): 자동 모드에서 보이는 영역 추적. Mafs `usePaneContext()`, 250ms 디바운스, `X_RANGE_LIMIT`(2e6)로 클램핑.
-- **graphStore** (`src/store/graphStore.ts`): formula, 범위, points/implicitCurves, loading/error, viewportMode/Bounds, 캐시.
-- **themeStore** (`src/store/themeStore.ts`): light/dark/system, `data-theme`, localStorage 유지.
+- **auto 모드**: 화면 범위(Mafs pane) + 바깥 25%를 미리 계산 → 팬할 때 가장자리가 비지 않음. 해상도는 화면 기준(화면당 샘플 500개, 격자 320칸).
+- **manual 모드**: 입력한 범위·간격 그대로. 값은 ±1,000,000 이내만 반영 (Mafs 표시 한계).
+- **캐시**: 최근 사용 20건(LRU). 키는 수식·범위·해상도.
 
 ---
 
 ## 수학 엔진 (Rust, `src-tauri/src/math_engine.rs`)
 
-- **calculate_graph**: `y=f(x)` — meval 파싱, x에 바인딩, x_min~x_max를 step 간격 샘플링, inf/nan 제거 → `Vec<Point>`.
-- **calculate_implicit**: `f(x,y)=0` — 2D 그리드에서 f 평가, marching squares로 영점 교차, 곡선 연결(saddle 케이스 처리) → `Vec<Vec<Point>>`.
-- **log(x)**: 상용로그 `ln(x)/ln(10)`. sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, ln, exp, abs 등 지원.
+- **calculate_graph** (`y = f(x)`): `x_min + i·step` 위치에서 샘플링(마지막은 항상 `x_max`). 정의되지 않는 구간, 점근선, 점프(`floor`, `mod`)에서 구간을 나눠 세로선이 생기지 않음 — 이웃 샘플 사이를 좁혀 가며 불연속을 판정. 샘플 최대 100,000개.
+- **calculate_implicit** (`f(x, y) = 0`): marching squares (saddle 셀 처리)
+  - 격자 안쪽 선을 살짝 어긋나게 배치해 대칭선(x = ±y, x = 0) 위 꼭짓점의 퇴화를 피함
+  - 격자보다 가는 띠(`|xy| = 0.1` 등)는 해당 셀을 4×4로 다시 나눠 계산 (적응형 세분화)
+  - 극(`1/x`, `tan x`)에서 부호가 바뀌는 곳은 곡선으로 그리지 않음
+  - 선분 연결은 끝점 해시로 O(n). 격자 최대 1024
+- **추가 함수**: `log`(상용로그), `mod(a, b)`(나머지, 결과 부호는 b를 따름)
+- 커맨드는 `async` + `spawn_blocking`으로 실행되어 계산 중에도 창이 멈추지 않습니다.
 
 ---
 
-## 설정 상수 (`src/constants.ts`)
+## 설정 상수
 
-| 상수                  | 값       | 설명                                              |
-| --------------------- | -------- | ------------------------------------------------- |
-| POINTS_PER_VIEW       | 500      | explicit 뷰포트당 샘플 수                         |
-| X_RANGE_LIMIT         | 2e6      | x 범위 상한 (줌 아웃 시 과계산 방지)              |
-| IMPLICIT_GRID_MIN/MAX | 80 / 320 | implicit 그리드 해상도 (span×12로 계산 후 클램핑) |
-| MAX_CACHE_ENTRIES     | 20       | 캐시당 LRU 최대 개수                              |
+| 상수                      | 값   | 설명                                                 |
+| ------------------------- | ---- | ---------------------------------------------------- |
+| `POINTS_PER_VIEW`         | 500  | explicit 화면당 샘플 수                              |
+| `IMPLICIT_CELLS_PER_VIEW` | 320  | implicit 화면 한 변당 격자 칸 수                     |
+| `PREFETCH_RATIO`          | 0.25 | auto 모드에서 화면 밖으로 미리 계산하는 비율 (각 방향) |
+| `MAX_CACHE_ENTRIES`       | 20   | LRU 캐시 크기                                        |
+| `X_RANGE_LIMIT`           | 2e6  | 범위 폭 상한 (`graphStore.ts`, 수동 입력은 ±1e6)     |
 
 ---
 
 ## 지원 수식
 
-**Explicit** `y = f(x)` 와 **Implicit** `f(x,y) = 0` 형태를 지원합니다. 변수는 `x`, `y`를 사용하세요.
+- **y = f(x)**: `y = …`, `f(x) = …`, 또는 y가 없는 식 (`x^2`)
+- **f(x, y) = 0**: `=`가 있는 식 (`x^2+y^2=1` → `(x^2+y^2)-(1)`), 또는 `=` 없이 y가 들어간 식 (`x^2+y^2-1`)
+- **암묵적 곱셈**: `2x`, `xy`, `x(x+1)`, `2\pi x`, `x\sin x`
 
-- **수식 타입 감지** (`src/utils/latexToMeval.ts`): `=` 없음 → explicit, `y =` → explicit, 그 외 `=` → implicit.
-- **Implicit 변환**: `f(x,y)=g(x,y)` → meval `(left)-(right)` (예: `x^2+y^2=1` → `(x^2+y^2)-(1)`).
+### 지원 함수·기호
 
-### 지원 함수
+| LaTeX                                          | meval                    | 예시                    |
+| ---------------------------------------------- | ------------------------ | ----------------------- |
+| `\sin x`, `\cos x`, `\tan x`, `\sin^2 x`      | sin, cos, tan            | `sin(x)^(2)`            |
+| `\arcsin`, `\arccos`, `\arctan`                | asin, acos, atan         | `atan(x)`               |
+| `\sinh`, `\cosh`, `\tanh` (`\arsinh` 등)       | sinh … atanh             | `cosh(x)`               |
+| `\ln x`, `\log x`, `\log_{10} x`, `\log_2 x`   | ln, log (상용로그)       | `(ln(x)/ln(2))`         |
+| `\exp`, `e^{x}`                                | exp, e                   | `e^(x)`                 |
+| `\sqrt{x}`, `\sqrt[3]{x}`                      | sqrt, 거듭제곱           | `(x)^(1/(3))`           |
+| `\frac{a}{b}` (중첩 가능)                      | (a)/(b)                  | `(1)/(sqrt(x^(2)+1))`   |
+| `\left\|x\right\|`, `\|x\|`                     | abs                      | `abs(x)`                |
+| `\pi`, `\cdot`, `\times`                       | pi, \*                   | `2*pi*x`                |
+| `50\%`                                         | ÷100 (퍼센트)            | `(50/100)`              |
+| `mod(x, 3)`                                    | mod (나머지)             | `mod(x,3)`              |
 
-| LaTeX                                    | meval               | 예시              |
-| ---------------------------------------- | ------------------- | ----------------- |
-| `\sin(x)`, `\cos(x)`, `\tan(x)`          | sin, cos, tan       | `sin(x) + cos(x)` |
-| `\arcsin(x)`, `\arccos(x)`, `\arctan(x)` | asin, acos, atan    | `arctan(x)`       |
-| `\sinh(x)`, `\cosh(x)`, `\tanh(x)`       | sinh, cosh, tanh    | `cosh(x)`         |
-| `\asinh(x)`, `\acosh(x)`, `\atanh(x)`    | asinh, acosh, atanh | `tanh(x)`         |
-| `\ln(x)`, `\log(x)`, `\log_{10}(x)`      | ln, log (상용로그)  | `ln(x)`, `log(x)` |
-| `\exp(x)`                                | exp                 | `exp(-x^2)`       |
-| `\sqrt{x}`                               | sqrt                | `sqrt(x)`         |
-| `\frac{a}{b}`                            | (a)/(b)             | `(x+1)/(x-1)`     |
-| `x^{n}`, `x^n`                           | x^(n)               | `x^2`, `x^(1/2)`  |
-| `\pi`, `\e`                              | pi, e               | `sin(pi*x)`       |
-| `\cdot`, `\times`                        | \*                  | `x \cdot 2`       |
-| `\abs{x}`                                | abs                 | `abs(x)`          |
-
-### 미지원 (에러 메시지 표시)
+### 미지원 (안내 메시지 표시)
 
 - 적분 `\int`, `\iint`, `\oint`
 - 합/곱 `\sum`, `\prod`
@@ -163,8 +176,8 @@ LaTeX 입력 → FormulaInput → latexToMeval() → 수식 타입 감지
 
 ### 모드
 
-- **뷰포트 자동**: 줌/팬한 구간만 계산 (기본값)
-- **수동 범위**: x/y 최소·최대·간격 직접 입력
+- **뷰포트 자동**: 팬/줌한 화면 범위를 계산 (기본값)
+- **수동 범위**: x/y 최소·최대·간격을 입력하면 입력이 멈춘 뒤 자동으로 다시 계산. 이 모드에서는 팬/줌을 끕니다.
 
 ---
 
@@ -206,6 +219,13 @@ npm install
 npm run tauri dev
 ```
 
+### テスト
+
+```bash
+npm test            # フロントエンド (vitest)
+npm run test:rust   # 数式エンジン (cargo test)
+```
+
 ---
 
 ## アーキテクチャ
@@ -226,84 +246,93 @@ npm run tauri dev
 ```
 R_R_Gebra/
 ├── src/
-│   ├── components/        # FormulaInput, GraphCanvas, ViewportObserver
-│   ├── store/             # graphStore, themeStore
-│   ├── utils/latexToMeval.ts
-│   ├── api.ts             # Tauri invoke ラッパー
-│   └── constants.ts
+│   ├── components/
+│   │   ├── FormulaInput.tsx         # 数式入力(MathLive)、モード・テーマ、手動範囲
+│   │   ├── GraphCanvas.tsx          # Mafs 描画、再計算タイミング
+│   │   ├── ViewportObserver.tsx     # auto モードで表示範囲を追跡
+│   │   └── AdaptiveCoordinates.tsx  # 拡大率に合わせた軸目盛り・ラベル
+│   ├── store/                       # graphStore(計算・キャッシュ), themeStore
+│   ├── hooks/useDebouncedValue.ts
+│   ├── utils/
+│   │   ├── latexToMeval.ts          # LaTeX → meval 式、式タイプ判定
+│   │   ├── friendlyError.ts         # エンジンのエラー → 韓国語メッセージ
+│   │   └── axisLineInterval.ts      # 目盛り間隔・ラベル形式
+│   ├── api.ts                       # Tauri invoke ラッパー
+│   └── constants.ts                 # 計算範囲・解像度 (computeWindow)
 └── src-tauri/src/
-    ├── lib.rs             # Tauri コマンド登録
-    └── math_engine.rs     # 式パース・評価 (meval)
+    ├── lib.rs                       # Tauri コマンド (async + spawn_blocking)
+    └── math_engine.rs               # サンプリング・marching squares (meval)
 ```
 
 ### データフロー
 
 ```
-LaTeX 入力 → FormulaInput → latexToMeval() → 式タイプ判定
-  → キャッシュ確認 → (ミス時) Tauri invoke → math_engine
-  → Point[] / Point[][] → キャッシュ保存 → GraphCanvas (Mafs 描画)
+LaTeX 入力 → latexToMeval() (タイプ判定・変換) → graphStore
+  → compute(): 範囲・解像度を決定 → キャッシュ確認 → (ミス時) Tauri invoke → math_engine
+  → 曲線リスト Point[][] → キャッシュ保存 → GraphCanvas (Mafs Polyline)
 ```
+
+- 計算はすべて `graphStore.compute()` を通ります。式・モード・表示範囲・手動範囲が変わるか「グラフ描画」を押すと `GraphCanvas` が呼び出します。
+- 遅れて届いた古いリクエストの結果は破棄します（リクエスト番号で比較）。
+- 数式入力は 500ms、表示範囲は 250ms、手動範囲の入力は 300ms 変化がないときに反映します。
 
 ### API (`src/api.ts`)
 
-| 関数                | リクエスト                       | 戻り値    |
-| ------------------- | -------------------------------- | --------- |
-| `calculateGraph`    | formula, x_min, x_max, step      | Point[]   |
-| `calculateImplicit` | formula, x_min～y_max, grid_size | Point[][] |
+| 関数                | リクエスト                       | 戻り値                                      |
+| ------------------- | -------------------------------- | ------------------------------------------- |
+| `calculateGraph`    | formula, x_min, x_max, step      | `Point[][]` — 漸近線・定義域の境界で分割した区間 |
+| `calculateImplicit` | formula, x_min～y_max, grid_size | `Point[][]` — 等高線ごとの曲線              |
 
-### キャッシュ
+### 計算範囲とキャッシュ
 
-- LRU 最大 20 件（graphCache / implicitCache 各）。Explicit キー: `formula|xMin|xMax|step`。Implicit: `formula|xMin|xMax|yMin|yMax|gridSize`。
-
----
-
-## コンポーネント
-
-- **FormulaInput**: MathLive LaTeX 入力、式タイプ(explicit/implicit)判定、ビューポート(自動/手動)、テーマ、手動範囲。500ms デバウンス。
-- **GraphCanvas**: Mafs でグラフ描画。Explicit はポイント配列、Implicit は marching squares で複数曲線。
-- **ViewportObserver**: 自動モードで表示範囲追跡。250ms デバウンス、X_RANGE_LIMIT(2e6) でクランプ。
-- **graphStore** / **themeStore**: グラフ状態・キャッシュ、テーマ(localStorage 永続)。
+- **auto モード**: 表示範囲（Mafs pane）＋外側 25% を先に計算 → パン時に端が空白にならない。解像度は画面基準（画面あたりサンプル 500、格子 320 マス）。
+- **manual モード**: 入力した範囲・刻みのまま。値は ±1,000,000 以内のみ反映（Mafs の表示限界）。
+- **キャッシュ**: 最近使った 20 件（LRU）。キーは式・範囲・解像度。
 
 ---
 
 ## 数式エンジン (Rust, `math_engine.rs`)
 
-- **calculate_graph**: `y=f(x)` を meval でパース・サンプリング → `Vec<Point>`。
-- **calculate_implicit**: `f(x,y)=0` を 2D グリッド＋marching squares で曲線化 → `Vec<Vec<Point>>`。
-- log(x) は常用対数。sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, ln, exp, abs 等対応。
+- **calculate_graph** (`y = f(x)`): `x_min + i·step` でサンプリング（最後は必ず `x_max`）。定義されない区間・漸近線・ジャンプ（`floor`, `mod`）で区間を分け、縦線が出ないようにする — 隣接サンプル間を狭めながら不連続を判定。サンプル最大 100,000。
+- **calculate_implicit** (`f(x, y) = 0`): marching squares（saddle セル対応）
+  - 格子の内側の線をわずかにずらし、対称線（x = ±y, x = 0）上の頂点による退化を回避
+  - 格子より細い帯（`|xy| = 0.1` など）はそのセルを 4×4 に再分割して計算（適応的細分化）
+  - 極（`1/x`, `tan x`）で符号が変わる箇所は曲線として描かない
+  - 線分の連結は端点ハッシュで O(n)。格子最大 1024
+- **追加関数**: `log`（常用対数）、`mod(a, b)`（剰余、結果の符号は b に従う）
+- コマンドは `async` + `spawn_blocking` で実行され、計算中もウィンドウが固まりません。
 
 ---
 
-## 定数 (`src/constants.ts`)
+## 定数
 
-POINTS_PER_VIEW=500、X_RANGE_LIMIT=2e6、IMPLICIT_GRID 80～320、MAX_CACHE_ENTRIES=20。
+`POINTS_PER_VIEW`=500（explicit 画面あたりサンプル数）、`IMPLICIT_CELLS_PER_VIEW`=320（implicit 画面一辺あたりの格子数）、`PREFETCH_RATIO`=0.25（auto モードで画面外を先に計算する割合）、`MAX_CACHE_ENTRIES`=20（LRU）、`X_RANGE_LIMIT`=2e6（範囲幅の上限、手動入力は ±1e6）。
 
 ---
 
 ## 対応数式
 
-**Explicit** `y = f(x)` と **Implicit** `f(x,y) = 0` 形式をサポート。変数は `x`, `y` を使用。
+- **y = f(x)**: `y = …`、`f(x) = …`、または y を含まない式（`x^2`）
+- **f(x, y) = 0**: `=` を含む式（`x^2+y^2=1` → `(x^2+y^2)-(1)`）、または `=` なしで y を含む式（`x^2+y^2-1`）
+- **暗黙の乗算**: `2x`, `xy`, `x(x+1)`, `2\pi x`, `x\sin x`
 
-- **式タイプ判定** (`latexToMeval.ts`): `=` なし→explicit、`y =`→explicit、それ以外の `=`→implicit。
-- **Implicit 変換**: `f(x,y)=g(x,y)` → meval の `(left)-(right)`。
+### 対応関数・記号
 
-### 対応関数
+| LaTeX                                          | meval                  | 例                    |
+| ---------------------------------------------- | ---------------------- | --------------------- |
+| `\sin x`, `\cos x`, `\tan x`, `\sin^2 x`      | sin, cos, tan          | `sin(x)^(2)`          |
+| `\arcsin`, `\arccos`, `\arctan`                | asin, acos, atan       | `atan(x)`             |
+| `\sinh`, `\cosh`, `\tanh`（`\arsinh` など）    | sinh … atanh           | `cosh(x)`             |
+| `\ln x`, `\log x`, `\log_{10} x`, `\log_2 x`   | ln, log（常用対数）    | `(ln(x)/ln(2))`       |
+| `\exp`, `e^{x}`                                | exp, e                 | `e^(x)`               |
+| `\sqrt{x}`, `\sqrt[3]{x}`                      | sqrt, べき乗           | `(x)^(1/(3))`         |
+| `\frac{a}{b}`（入れ子可）                      | (a)/(b)                | `(1)/(sqrt(x^(2)+1))` |
+| `\left\|x\right\|`, `\|x\|`                     | abs                    | `abs(x)`              |
+| `\pi`, `\cdot`, `\times`                       | pi, \*                 | `2*pi*x`              |
+| `50\%`                                         | ÷100（パーセント）     | `(50/100)`            |
+| `mod(x, 3)`                                    | mod（剰余）            | `mod(x,3)`            |
 
-| LaTeX                                    | meval               | 例                |
-| ---------------------------------------- | ------------------- | ----------------- |
-| `\sin(x)`, `\cos(x)`, `\tan(x)`          | sin, cos, tan       | `sin(x) + cos(x)` |
-| `\arcsin(x)`, `\arccos(x)`, `\arctan(x)` | asin, acos, atan    | `arctan(x)`       |
-| `\sinh(x)`, `\cosh(x)`, `\tanh(x)`       | sinh, cosh, tanh    | `cosh(x)`         |
-| `\ln(x)`, `\log(x)`, `\log_{10}(x)`      | ln, log（常用対数） | `ln(x)`, `log(x)` |
-| `\exp(x)`                                | exp                 | `exp(-x^2)`       |
-| `\sqrt{x}`                               | sqrt                | `sqrt(x)`         |
-| `\frac{a}{b}`                            | (a)/(b)             | `(x+1)/(x-1)`     |
-| `x^{n}`, `x^n`                           | x^(n)               | `x^2`, `x^(1/2)`  |
-| `\pi`, `\e`                              | pi, e               | `sin(pi*x)`       |
-| `\cdot`, `\times`                        | \*                  | `x \cdot 2`       |
-| `\abs{x}`                                | abs                 | `abs(x)`          |
-
-### 非対応（エラーメッセージ表示）
+### 非対応（メッセージ表示）
 
 - 積分 `\int`, `\iint`, `\oint`
 - 和・積 `\sum`, `\prod`
@@ -311,8 +340,8 @@ POINTS_PER_VIEW=500、X_RANGE_LIMIT=2e6、IMPLICIT_GRID 80～320、MAX_CACHE_ENT
 
 ### モード
 
-- **ビューポート自動**: ズーム・パンした範囲のみ計算（デフォルト）
-- **手動範囲**: x/y の最小・最大・刻みを直接入力
+- **ビューポート自動**: パン・ズームした表示範囲を計算（デフォルト）
+- **手動範囲**: x/y の最小・最大・刻みを入力すると、入力が止まった後に自動で再計算。このモードではパン・ズームを無効化。
 
 ---
 

@@ -131,7 +131,8 @@ describe('compute: 결과 반영', () => {
 
     await store().compute();
 
-    expect(store().error).toBe('Invalid syntax: x+');
+    // 엔진 원문 대신 한국어 안내
+    expect(store().error).toBe('수식을 해석할 수 없습니다. 괄호와 연산자를 확인해 주세요.');
     expect(store().loading).toBe(false);
   });
 
